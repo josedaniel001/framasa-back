@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'bloquera',
     'piedrinera',
     'planillas',
+    'reportes',
 ]
 
 MIDDLEWARE = [
@@ -85,9 +86,9 @@ WSGI_APPLICATION = 'framasa_backend.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME', 'framasa_db'),
-        'USER': os.getenv('DB_USER', 'postgres'),
-        'PASSWORD': os.getenv('DB_PASSWORD', ''),
+        'NAME': os.getenv('DB_NAME', 'framasa_ahdb'),
+        'USER': os.getenv('DB_USER', 'framasa_user'),
+        'PASSWORD': os.getenv('DB_PASSWORD', 'framasapass'),
         'HOST': os.getenv('DB_HOST', 'localhost'),
         'PORT': os.getenv('DB_PORT', '5432'),
     }

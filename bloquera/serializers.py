@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import ProductoBloquera
+from .models import ProductoBloquera, MovimientoInventarioBloquera, TipoMovimientoBloquera
 
 
 class ProductoBloqueraSerializer(serializers.ModelSerializer):
@@ -85,4 +85,97 @@ class ProductosBloqueraStatsSerializer(serializers.Serializer):
     productos_inactivos = serializers.IntegerField()
     productos_stock_bajo = serializers.IntegerField()
     stock_total_unidades = serializers.IntegerField()
+
+
+class MovimientoInventarioBloqueraSerializer(serializers.ModelSerializer):
+    """
+    Serializer para movimientos de inventario de bloquera
+    """
+    producto_codigo = serializers.CharField(source='producto.codigo', read_only=True)
+    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
+    usuario_nombre = serializers.CharField(source='usuario.username', read_only=True)
+    tipo_display = serializers.CharField(source='get_tipo_display', read_only=True)
+
+    class Meta:
+        model = MovimientoInventarioBloquera
+        fields = (
+            'id', 'producto', 'producto_id', 'producto_codigo', 'producto_nombre',
+            'tipo', 'tipo_display', 'cantidad',
+            'stock_anterior', 'stock_nuevo',
+            'motivo', 'observaciones',
+            'usuario', 'usuario_id', 'usuario_nombre',
+            'fecha_movimiento', 'created_at', 'updated_at'
+        )
+        read_only_fields = (
+            'id', 'stock_anterior', 'stock_nuevo', 'fecha_movimiento',
+            'created_at', 'updated_at', 'producto_codigo', 'producto_nombre',
+            'usuario_nombre', 'tipo_display'
+        )
+
+    def validate(self, data):
+        """
+        Validación personalizada
+        """
+        tipo = data.get('tipo')
+        cantidad = data.get('cantidad')
+        producto = data.get('producto')
+
+        # Para ENTRADA, SALIDA, DEVOLUCION, TRANSFERENCIA: cantidad debe ser positiva
+        if tipo in [TipoMovimientoBloquera.ENTRADA, TipoMovimientoBloquera.SALIDA,
+                    TipoMovimientoBloquera.DEVOLUCION, TipoMovimientoBloquera.TRANSFERENCIA]:
+            if cantidad <= 0:
+                raise serializers.ValidationError({
+                    'cantidad': 'La cantidad debe ser mayor a 0 para este tipo de movimiento'
+                })
+
+        # Para SALIDA y TRANSFERENCIA: verificar que haya stock suficiente
+        if tipo in [TipoMovimientoBloquera.SALIDA, TipoMovimientoBloquera.TRANSFERENCIA]:
+            if producto and producto.stock_actual < cantidad:
+                raise serializers.ValidationError({
+                    'cantidad': f'Stock insuficiente. Stock actual: {producto.stock_actual}'
+                })
+
+        return data
+
+    def create(self, validated_data):
+        """
+        Crear movimiento y asignar usuario automáticamente
+        """
+        # Obtener el usuario del request
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            validated_data['usuario'] = request.user
+        
+        return super().create(validated_data)
+
+    def to_representation(self, instance):
+        """
+        Personalizar la representación para el frontend
+        """
+        data = super().to_representation(instance)
+        return {
+            'id': data.get('id'),
+            'producto': {
+                'id': instance.producto_id,
+                'codigo': data.get('producto_codigo'),
+                'nombre': data.get('producto_nombre'),
+            },
+            'producto_id': instance.producto_id,
+            'tipo': data.get('tipo'),
+            'tipoDisplay': data.get('tipo_display'),
+            'cantidad': data.get('cantidad'),
+            'stockAnterior': data.get('stock_anterior'),
+            'stockNuevo': data.get('stock_nuevo'),
+            'motivo': data.get('motivo'),
+            'observaciones': data.get('observaciones'),
+            'usuario': {
+                'id': instance.usuario_id,
+                'nombre': data.get('usuario_nombre'),
+            },
+            'usuario_id': instance.usuario_id,
+            'fechaMovimiento': data.get('fecha_movimiento'),
+            'fecha_movimiento': data.get('fecha_movimiento'),
+            'created_at': data.get('created_at'),
+            'updated_at': data.get('updated_at'),
+        }
 

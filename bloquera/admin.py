@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import ProductoBloquera
+from .models import ProductoBloquera, MovimientoInventarioBloquera
 
 
 @admin.register(ProductoBloquera)
@@ -27,5 +27,31 @@ class ProductoBloqueraAdmin(admin.ModelAdmin):
         ('Fechas', {
             'fields': ('created_at', 'updated_at'),
             'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(MovimientoInventarioBloquera)
+class MovimientoInventarioBloqueraAdmin(admin.ModelAdmin):
+    list_display = (
+        'id', 'producto', 'tipo', 'cantidad',
+        'stock_anterior', 'stock_nuevo', 'usuario', 'fecha_movimiento'
+    )
+    list_filter = ('tipo', 'fecha_movimiento')
+    search_fields = ('producto__codigo', 'producto__nombre', 'usuario__username')
+    readonly_fields = (
+        'producto', 'tipo', 'cantidad', 'stock_anterior', 'stock_nuevo',
+        'motivo', 'observaciones', 'usuario', 'fecha_movimiento',
+        'created_at', 'updated_at'
+    )
+    fieldsets = (
+        ('Movimiento', {
+            'fields': ('producto', 'tipo', 'cantidad', 'motivo', 'observaciones')
+        }),
+        ('Stock', {
+            'fields': ('stock_anterior', 'stock_nuevo')
+        }),
+        ('Auditoría', {
+            'fields': ('usuario', 'fecha_movimiento', 'created_at', 'updated_at')
         }),
     )

@@ -1,6 +1,7 @@
 from django.db import models
 from django.core.validators import MinValueValidator
 from django.utils import timezone
+from authentication.models import Usuario
 
 
 class AgregadoPiedrinera(models.Model):
@@ -169,3 +170,148 @@ class Camion(models.Model):
 
     def __str__(self):
         return f"{self.placa} - {self.marca} {self.modelo}"
+
+
+class TipoMovimientoPiedrinera(models.TextChoices):
+    """
+    Tipos de movimientos de inventario para piedrinera
+    """
+    ENTRADA = 'ENTRADA', 'Entrada'
+    SALIDA = 'SALIDA', 'Salida'
+    AJUSTE = 'AJUSTE', 'Ajuste'
+    TRANSFERENCIA = 'TRANSFERENCIA', 'Transferencia'
+    DEVOLUCION = 'DEVOLUCION', 'Devolución'
+
+
+class MovimientoInventarioPiedrinera(models.Model):
+    """
+    Modelo para movimientos de inventario de agregados de piedrinera
+    Usa DecimalField para manejar cantidades en m³ con decimales
+    """
+    producto = models.ForeignKey(
+        AgregadoPiedrinera,
+        on_delete=models.PROTECT,
+        related_name='movimientos',
+        db_column='producto_id'
+    )
+    tipo = models.CharField(
+        max_length=20,
+        choices=TipoMovimientoPiedrinera.choices,
+        db_column='tipo'
+    )
+    cantidad = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        db_column='cantidad',
+        help_text='Cantidad del movimiento en m³ (positiva para entrada/salida, puede ser negativa para ajustes)'
+    )
+    stock_anterior = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        db_column='stock_anterior',
+        help_text='Stock antes del movimiento'
+    )
+    stock_nuevo = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        db_column='stock_nuevo',
+        help_text='Stock después del movimiento'
+    )
+    motivo = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        db_column='motivo',
+        help_text='Motivo del movimiento'
+    )
+    observaciones = models.TextField(
+        blank=True,
+        null=True,
+        db_column='observaciones'
+    )
+    usuario = models.ForeignKey(
+        Usuario,
+        on_delete=models.PROTECT,
+        related_name='movimientos_inventario_piedrinera',
+        db_column='usuario_id',
+        help_text='Usuario que realizó el movimiento'
+    )
+    fecha_movimiento = models.DateTimeField(
+        auto_now_add=True,
+        db_column='fecha_movimiento'
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        db_column='created_at'
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        db_column='updated_at'
+    )
+
+    class Meta:
+        db_table = 'movimientos_inventario_piedrinera'
+        verbose_name = 'Movimiento de Inventario Piedrinera'
+        verbose_name_plural = 'Movimientos de Inventario Piedrinera'
+        ordering = ['-fecha_movimiento']
+        indexes = [
+            models.Index(fields=['producto', 'fecha_movimiento']),
+            models.Index(fields=['tipo', 'fecha_movimiento']),
+            models.Index(fields=['fecha_movimiento']),
+        ]
+
+    def __str__(self):
+        return f"{self.get_tipo_display()} - {self.producto.codigo} - {self.cantidad} m³"
+
+    def clean(self):
+        """
+        Validación personalizada
+        """
+        from django.core.exceptions import ValidationError
+        from decimal import Decimal
+        
+        # Para ENTRADA, SALIDA, DEVOLUCION, TRANSFERENCIA: cantidad debe ser positiva
+        if self.tipo in [TipoMovimientoPiedrinera.ENTRADA, TipoMovimientoPiedrinera.SALIDA, 
+                         TipoMovimientoPiedrinera.DEVOLUCION, TipoMovimientoPiedrinera.TRANSFERENCIA]:
+            if self.cantidad <= Decimal('0'):
+                raise ValidationError({
+                    'cantidad': 'La cantidad debe ser mayor a 0 para este tipo de movimiento'
+                })
+        
+        # Para SALIDA y TRANSFERENCIA: verificar que haya stock suficiente
+        if self.tipo in [TipoMovimientoPiedrinera.SALIDA, TipoMovimientoPiedrinera.TRANSFERENCIA]:
+            if hasattr(self, 'producto') and self.producto:
+                if self.producto.stock_actual_m3 < self.cantidad:
+                    raise ValidationError({
+                        'cantidad': f'Stock insuficiente. Stock actual: {self.producto.stock_actual_m3} m³'
+                    })
+
+    def save(self, *args, **kwargs):
+        """
+        Actualiza el stock del producto al guardar el movimiento
+        """
+        if not self.pk:  # Solo en creación
+            self.clean()  # Validar antes de guardar
+            from decimal import Decimal
+            self.stock_anterior = self.producto.stock_actual_m3
+            
+            # Calcular nuevo stock según el tipo de movimiento
+            if self.tipo == TipoMovimientoPiedrinera.ENTRADA:
+                self.stock_nuevo = self.stock_anterior + self.cantidad
+            elif self.tipo == TipoMovimientoPiedrinera.SALIDA:
+                self.stock_nuevo = max(Decimal('0'), self.stock_anterior - self.cantidad)
+            elif self.tipo == TipoMovimientoPiedrinera.AJUSTE:
+                # Para ajustes, la cantidad puede ser positiva (incremento) o negativa (decremento)
+                self.stock_nuevo = max(Decimal('0'), self.stock_anterior + self.cantidad)
+            elif self.tipo == TipoMovimientoPiedrinera.DEVOLUCION:
+                self.stock_nuevo = self.stock_anterior + self.cantidad
+            else:  # TRANSFERENCIA
+                self.stock_nuevo = max(Decimal('0'), self.stock_anterior - self.cantidad)
+            
+            # Actualizar el stock del producto
+            self.producto.stock_actual_m3 = self.stock_nuevo
+            self.producto.save(update_fields=['stock_actual_m3', 'updated_at'])
+        
+        super().save(*args, **kwargs)

@@ -3,13 +3,14 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Q, F
-from .models import AgregadoPiedrinera, Camion
+from .models import AgregadoPiedrinera, Camion, MovimientoInventarioPiedrinera, TipoMovimientoPiedrinera
 from .serializers import (
     AgregadoPiedrineraSerializer,
     AgregadoPiedrineraListSerializer,
     AgregadosStatsSerializer,
     CamionSerializer,
-    CamionListSerializer
+    CamionListSerializer,
+    MovimientoInventarioPiedrineraSerializer
 )
 
 
@@ -141,3 +142,85 @@ class CamionViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(activo=False)
 
         return queryset.order_by('placa')
+
+
+class MovimientoInventarioPiedrineraViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para movimientos de inventario de piedrinera
+    Permite GET (listar), POST (crear), GET/{id} (detalle)
+    Los movimientos no se pueden editar ni eliminar (solo lectura después de creados)
+    """
+    queryset = MovimientoInventarioPiedrinera.objects.select_related('producto', 'usuario').all()
+    serializer_class = MovimientoInventarioPiedrineraSerializer
+    permission_classes = [IsAuthenticated]
+    # La paginación se maneja automáticamente con la configuración global (PAGE_SIZE: 20)
+
+    def get_queryset(self):
+        """
+        Filtros opcionales:
+        - producto: ID del producto
+        - tipo: tipo de movimiento (ENTRADA, SALIDA, AJUSTE, etc.)
+        - fecha_desde: fecha desde (YYYY-MM-DD)
+        - fecha_hasta: fecha hasta (YYYY-MM-DD)
+        """
+        queryset = self.queryset
+
+        # Filtro por producto
+        producto_id = self.request.query_params.get('producto', None)
+        if producto_id:
+            try:
+                queryset = queryset.filter(producto_id=int(producto_id))
+            except ValueError:
+                pass
+
+        # Filtro por tipo
+        tipo = self.request.query_params.get('tipo', None)
+        if tipo:
+            queryset = queryset.filter(tipo=tipo)
+
+        # Filtro por rango de fechas
+        fecha_desde = self.request.query_params.get('fecha_desde', None)
+        fecha_hasta = self.request.query_params.get('fecha_hasta', None)
+        if fecha_desde:
+            from django.utils.dateparse import parse_date
+            fecha = parse_date(fecha_desde)
+            if fecha:
+                from django.utils import timezone
+                queryset = queryset.filter(fecha_movimiento__date__gte=fecha)
+        if fecha_hasta:
+            from django.utils.dateparse import parse_date
+            fecha = parse_date(fecha_hasta)
+            if fecha:
+                from django.utils import timezone
+                queryset = queryset.filter(fecha_movimiento__date__lte=fecha)
+
+        return queryset
+
+    def update(self, request, *args, **kwargs):
+        """
+        Los movimientos no se pueden editar después de creados
+        """
+        return Response(
+            {'error': 'Los movimientos de inventario no se pueden editar'},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Los movimientos no se pueden eliminar después de creados
+        """
+        return Response(
+            {'error': 'Los movimientos de inventario no se pueden eliminar'},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED
+        )
+
+    @action(detail=False, methods=['get'])
+    def tipos(self, request):
+        """
+        Endpoint para obtener los tipos de movimiento disponibles
+        """
+        tipos = [
+            {'value': choice[0], 'label': choice[1]}
+            for choice in TipoMovimientoPiedrinera.choices
+        ]
+        return Response(tipos)

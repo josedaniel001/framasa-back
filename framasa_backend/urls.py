@@ -11,5 +11,6 @@ urlpatterns = [
     path('api/bloquera/', include('bloquera.urls')),
     path('api/piedrinera/', include('piedrinera.urls')),
     path('api/planillas/', include('planillas.urls')),
+    path('api/reportes/', include('reportes.urls')),
 ]
 
