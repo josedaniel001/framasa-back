@@ -1,9 +1,11 @@
 from django.db import models
+from django.db.models import Sum
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import MinValueValidator
 from django.utils import timezone
 from decimal import Decimal
+from datetime import timedelta
 from authentication.models import Usuario
 from ferreteria.models import Cliente
 
@@ -15,6 +17,7 @@ class EstadoFactura(models.TextChoices):
     PARCIAL = 'PARCIAL', 'Pago Parcial'
     PAGADA = 'PAGADA', 'Pagada'
     ANULADA = 'ANULADA', 'Anulada'
+    MORA = 'MORA', 'En Mora'
 
 
 class EstadoCotizacion(models.TextChoices):
@@ -171,21 +174,31 @@ class Factura(models.Model):
         return f"Factura {self.numero_factura} - {self.cliente.nombre}"
     
     def calcular_totales(self):
-        """Calcula los totales basándose en los detalles"""
+        """Calcula los totales basándose en los detalles y pagos"""
         detalles = self.detalles.all()
         self.subtotal = sum(detalle.subtotal for detalle in detalles)
         self.total = self.subtotal - self.descuento
-        self.saldo_pendiente = self.total - self.total_pagado
         
-        # Actualizar estado según el saldo
-        if self.total_pagado == 0:
-            self.estado = EstadoFactura.PENDIENTE
-        elif self.total_pagado < self.total:
-            self.estado = EstadoFactura.PARCIAL
-        elif self.total_pagado >= self.total:
+        # Solo contar pagos de EFECTIVO y TARJETA como pagados
+        # El FIADO queda como saldo pendiente
+        total_pagado = self.pagos.exclude(tipo_pago=TipoPago.FIADO).aggregate(
+            total=Sum('monto')
+        )['total'] or Decimal('0')
+        self.total_pagado = total_pagado
+        self.saldo_pendiente = max(self.total - self.total_pagado, Decimal('0'))
+
+        hoy = timezone.now().date()
+        if self.saldo_pendiente <= 0:
             self.estado = EstadoFactura.PAGADA
+        else:
+            if self.fecha_vencimiento and hoy > self.fecha_vencimiento:
+                self.estado = EstadoFactura.MORA
+            elif self.total_pagado == 0:
+                self.estado = EstadoFactura.PENDIENTE
+            else:
+                self.estado = EstadoFactura.PARCIAL
         
-        self.save(update_fields=['subtotal', 'total', 'saldo_pendiente', 'estado'])
+        self.save(update_fields=['subtotal', 'total', 'total_pagado', 'saldo_pendiente', 'estado'])
     
     def puede_pagar_fiado(self, monto_fiado):
         """Verifica si el cliente puede pagar el monto a fiado"""
@@ -693,16 +706,38 @@ class Pago(models.Model):
         return f"Pago {self.get_tipo_pago_display()} - Q{self.monto:.2f} - Factura {self.factura.numero_factura}"
     
     def save(self, *args, **kwargs):
-        """Actualiza el total pagado de la factura y el saldo del cliente si es fiado"""
+        """Actualiza el total pagado de la factura y el saldo del cliente"""
         is_new = self.pk is None
         super().save(*args, **kwargs)
         
         if is_new:
-            # Actualizar total pagado de la factura
-            self.factura.total_pagado = sum(pago.monto for pago in self.factura.pagos.all())
-            self.factura.calcular_totales()
+            cliente = self.factura.cliente
             
-            # Si es pago a fiado, actualizar saldo del cliente
             if self.tipo_pago == TipoPago.FIADO:
-                self.factura.cliente.saldo_actual += self.monto
-                self.factura.cliente.save(update_fields=['saldo_actual', 'updated_at'])
+                # El fiado aumenta el saldo del cliente (deuda)
+                cliente.saldo_actual += self.monto
+                cliente.save(update_fields=['saldo_actual', 'updated_at'])
+                
+                # Establecer fecha de vencimiento si no existe
+                if not self.factura.fecha_vencimiento:
+                    dias_gracia = getattr(cliente, 'dias_credito', None) or 30
+                    self.factura.fecha_vencimiento = timezone.now().date() + timedelta(days=dias_gracia)
+                    self.factura.save(update_fields=['fecha_vencimiento', 'updated_at'])
+            else:
+                # Cuando se paga con efectivo/tarjeta, reducir el saldo del cliente
+                # si hay saldo pendiente de esta factura que fue pagado con fiado
+                total_fiado_factura = self.factura.pagos.filter(
+                    tipo_pago=TipoPago.FIADO
+                ).aggregate(total=Sum('monto'))['total'] or Decimal('0')
+                
+                # Si hay fiado en esta factura y el cliente tiene saldo, reducirlo
+                if total_fiado_factura > 0 and cliente.saldo_actual > 0:
+                    # Reducir el saldo del cliente proporcionalmente
+                    monto_a_reducir = min(self.monto, cliente.saldo_actual, total_fiado_factura)
+                    cliente.saldo_actual -= monto_a_reducir
+                    cliente.saldo_actual = max(cliente.saldo_actual, Decimal('0'))
+                    cliente.save(update_fields=['saldo_actual', 'updated_at'])
+            
+            # Recalcular totales y estado de la factura
+            # (el fiado no reduce el saldo_pendiente, solo efectivo/tarjeta)
+            self.factura.calcular_totales()

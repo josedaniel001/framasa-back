@@ -622,7 +622,8 @@ enum EstadoFactura {
   PENDIENTE = 'PENDIENTE',
   PARCIAL = 'PARCIAL',
   PAGADA = 'PAGADA',
-  ANULADA = 'ANULADA'
+  ANULADA = 'ANULADA',
+  MORA = 'MORA'
 }
 ```
 
@@ -955,8 +956,9 @@ export const useFactura = ({ facturaId, token }: UseFacturaProps) => {
 2. **Empresa Mixta**: Si incluyes productos de múltiples empresas, el sistema automáticamente usa `empresa: "MIXTA"` y prefijo "MIXT"
 3. **Precios**: Si no envías `precio_unitario`, se usa el precio actual del producto
 4. **Stock**: Se actualiza automáticamente al crear la factura
-5. **Totales**: Se calculan automáticamente, no es necesario enviarlos
-6. **Moneda**: Todos los montos están en Quetzales (GTQ) [[memory:7529943]]
+5. **Totales y Pagos**: El backend recalcula `subtotal`, `total`, `total_pagado`, `saldo_pendiente` y el `estado` cada vez que se agrega o elimina un detalle/pago. Si la factura queda con saldo > 0 después de su `fecha_vencimiento`, pasa automáticamente al estado `MORA`.
+6. **Fiado**: Al registrar un pago con `tipo_pago = FIADO`, si la factura no tiene `fecha_vencimiento` se asigna automáticamente (30 días por defecto) y también se actualiza el saldo de crédito del cliente. Cuando el cliente paga en efectivo/tarjeta, se descuenta su saldo fiado abierto.
+7. **Moneda**: Todos los montos están en Quetzales (GTQ) [[memory:7529943]]
 
 ---
 
