@@ -12,5 +12,6 @@ urlpatterns = [
     path('api/piedrinera/', include('piedrinera.urls')),
     path('api/planillas/', include('planillas.urls')),
     path('api/reportes/', include('reportes.urls')),
+    path('api/facturacion/', include('facturacion.urls')),
 ]
 
