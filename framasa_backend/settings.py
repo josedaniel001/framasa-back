@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'planillas',
     'reportes',
     'taller',
+    'facturacion',
 ]
 
 MIDDLEWARE = [

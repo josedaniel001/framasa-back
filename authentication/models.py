@@ -78,3 +78,74 @@ class Usuario(AbstractBaseUser, PermissionsMixin):
     def get_short_name(self):
         return self.first_name or self.username
 
+
+class ConfiguracionRol(models.Model):
+    """
+    Modelo para gestionar la configuración de permisos de los roles básicos
+    """
+    ROL_CHOICES = [
+        ('admin', 'Administrador'),
+        ('gerente', 'Gerente'),
+        ('vendedor', 'Vendedor'),
+        ('operador', 'Operador'),
+    ]
+    
+    rol = models.CharField(
+        max_length=20,
+        choices=ROL_CHOICES,
+        unique=True,
+        verbose_name='Rol',
+        help_text='Rol básico del sistema'
+    )
+    descripcion = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name='Descripción',
+        help_text='Descripción de las funciones y responsabilidades de este rol'
+    )
+    activo = models.BooleanField(
+        default=True,
+        verbose_name='Activo',
+        help_text='Indica si este rol está activo en el sistema'
+    )
+    
+    # Permisos asociados al rol
+    permisos = models.ManyToManyField(
+        'auth.Permission',
+        blank=True,
+        related_name='configuraciones_rol',
+        verbose_name='Permisos',
+        help_text='Permisos asociados a este rol'
+    )
+    
+    # Grupos de Django asociados
+    grupos = models.ManyToManyField(
+        'auth.Group',
+        blank=True,
+        related_name='configuraciones_rol',
+        verbose_name='Grupos de Django',
+        help_text='Grupos de Django asociados a este rol'
+    )
+    
+    fecha_creacion = models.DateTimeField(auto_now_add=True, verbose_name='Fecha de Creación')
+    fecha_actualizacion = models.DateTimeField(auto_now=True, verbose_name='Fecha de Actualización')
+    
+    class Meta:
+        db_table = 'configuraciones_rol'
+        verbose_name = 'Configuración de Rol'
+        verbose_name_plural = 'Configuraciones de Roles'
+        ordering = ['rol']
+    
+    def __str__(self):
+        return self.get_rol_display()
+    
+    def get_permisos_list(self):
+        """Retorna lista de nombres de permisos"""
+        return [p.codename for p in self.permisos.all()]
+    
+    def get_num_usuarios(self):
+        """Retorna el número de usuarios con este rol"""
+        # Usar get_user_model para evitar importación circular
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        return User.objects.filter(rol=self.rol).count()
