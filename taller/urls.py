@@ -1,8 +1,12 @@
 # URLs del módulo Taller
-# Reservado para futuras funcionalidades del taller
 
-from django.urls import path
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import MaquinariaViewSet
+
+router = DefaultRouter()
+router.register(r'maquinaria', MaquinariaViewSet, basename='maquinaria')
 
 urlpatterns = [
-    # Rutas futuras del taller
+    path('', include(router.urls)),
 ]
