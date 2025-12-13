@@ -352,8 +352,8 @@ class FacturaCreateSerializer(serializers.ModelSerializer):
 
 class DetalleCotizacionSerializer(serializers.ModelSerializer):
     """Serializer para detalles de cotización"""
-    producto_id = serializers.IntegerField(write_only=True, required=True)
-    producto_empresa = serializers.ChoiceField(choices=EmpresaFactura.choices, write_only=True, required=True)
+    producto_id = serializers.IntegerField(write_only=True, required=False)
+    producto_empresa = serializers.ChoiceField(choices=EmpresaFactura.choices, required=False)
     producto_codigo = serializers.CharField(read_only=True)
     producto_nombre = serializers.CharField(read_only=True)
     subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
@@ -373,35 +373,42 @@ class DetalleCotizacionSerializer(serializers.ModelSerializer):
         producto_id = data.get('producto_id')
         empresa = data.get('producto_empresa')
         
-        # Obtener el modelo según la empresa
-        if empresa == EmpresaFactura.FERRETERIA:
-            try:
-                Producto.objects.get(id=producto_id, activo=True)
-            except Producto.DoesNotExist:
-                raise serializers.ValidationError({
-                    'producto_id': 'Producto no encontrado o inactivo'
-                })
-        elif empresa == EmpresaFactura.BLOQUERA:
-            try:
-                ProductoBloquera.objects.get(id=producto_id, activo=True)
-            except ProductoBloquera.DoesNotExist:
-                raise serializers.ValidationError({
-                    'producto_id': 'Producto no encontrado o inactivo'
-                })
-        elif empresa == EmpresaFactura.PIEDRINERA:
-            try:
-                AgregadoPiedrinera.objects.get(id=producto_id, activo=True)
-            except AgregadoPiedrinera.DoesNotExist:
-                raise serializers.ValidationError({
-                    'producto_id': 'Producto no encontrado o inactivo'
-                })
+        # Solo validar si ambos campos están presentes (para creación)
+        if producto_id and empresa:
+            # Obtener el modelo según la empresa
+            if empresa == EmpresaFactura.FERRETERIA:
+                try:
+                    Producto.objects.get(id=producto_id, activo=True)
+                except Producto.DoesNotExist:
+                    raise serializers.ValidationError({
+                        'producto_id': 'Producto no encontrado o inactivo'
+                    })
+            elif empresa == EmpresaFactura.BLOQUERA:
+                try:
+                    ProductoBloquera.objects.get(id=producto_id, activo=True)
+                except ProductoBloquera.DoesNotExist:
+                    raise serializers.ValidationError({
+                        'producto_id': 'Producto no encontrado o inactivo'
+                    })
+            elif empresa == EmpresaFactura.PIEDRINERA:
+                try:
+                    AgregadoPiedrinera.objects.get(id=producto_id, activo=True)
+                except AgregadoPiedrinera.DoesNotExist:
+                    raise serializers.ValidationError({
+                        'producto_id': 'Producto no encontrado o inactivo'
+                    })
         
         return data
     
     def create(self, validated_data):
         """Crear detalle y guardar información del producto"""
-        producto_id = validated_data.pop('producto_id')
-        empresa = validated_data.pop('producto_empresa')
+        producto_id = validated_data.pop('producto_id', None)
+        empresa = validated_data.pop('producto_empresa', None)
+        
+        if not producto_id or not empresa:
+            raise serializers.ValidationError({
+                'producto_id': 'Se requiere producto_id y producto_empresa para crear un detalle'
+            })
         
         # Obtener el ContentType según la empresa
         if empresa == EmpresaFactura.FERRETERIA:
@@ -566,4 +573,77 @@ class CotizacionCreateSerializer(serializers.ModelSerializer):
         cotizacion.calcular_totales()
         
         return cotizacion
+    
+    def update(self, instance, validated_data):
+        """Actualizar cotización con detalles"""
+        detalles_data = validated_data.pop('detalles', None)
+        
+        # Actualizar campos de la cotización
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        
+        # Si se proporcionan detalles, reemplazar los existentes
+        if detalles_data is not None:
+            # Eliminar detalles existentes
+            instance.detalles.all().delete()
+            
+            # Crear nuevos detalles
+            for detalle_data in detalles_data:
+                producto_id = detalle_data.get('producto_id')
+                empresa_prod = detalle_data.get('producto_empresa')
+                
+                # Validar que tenemos los datos necesarios
+                if not producto_id or not empresa_prod:
+                    raise serializers.ValidationError({
+                        'detalles': f'Detalle inválido: producto_id={producto_id}, producto_empresa={empresa_prod}'
+                    })
+                
+                # Obtener producto
+                try:
+                    if empresa_prod == EmpresaFactura.FERRETERIA:
+                        producto = Producto.objects.get(id=producto_id)
+                        content_type = ContentType.objects.get_for_model(Producto)
+                    elif empresa_prod == EmpresaFactura.BLOQUERA:
+                        producto = ProductoBloquera.objects.get(id=producto_id)
+                        content_type = ContentType.objects.get_for_model(ProductoBloquera)
+                    elif empresa_prod == EmpresaFactura.PIEDRINERA:
+                        producto = AgregadoPiedrinera.objects.get(id=producto_id)
+                        content_type = ContentType.objects.get_for_model(AgregadoPiedrinera)
+                    else:
+                        raise serializers.ValidationError({
+                            'detalles': f'Empresa no válida: {empresa_prod}'
+                        })
+                except (Producto.DoesNotExist, ProductoBloquera.DoesNotExist, AgregadoPiedrinera.DoesNotExist):
+                    raise serializers.ValidationError({
+                        'detalles': f'Producto no encontrado: id={producto_id}, empresa={empresa_prod}'
+                    })
+                
+                # Obtener precio del producto si no se proporciona
+                precio_unitario = detalle_data.get('precio_unitario')
+                if not precio_unitario:
+                    if empresa_prod == EmpresaFactura.FERRETERIA:
+                        precio_unitario = producto.precio_venta
+                    elif empresa_prod == EmpresaFactura.BLOQUERA:
+                        precio_unitario = producto.precio_unitario
+                    elif empresa_prod == EmpresaFactura.PIEDRINERA:
+                        precio_unitario = producto.precio_venta_m3
+                
+                # Crear detalle
+                DetalleCotizacion.objects.create(
+                    cotizacion=instance,
+                    content_type=content_type,
+                    object_id=producto_id,
+                    producto_codigo=producto.codigo,
+                    producto_nombre=producto.nombre,
+                    producto_empresa=empresa_prod,
+                    cantidad=detalle_data['cantidad'],
+                    precio_unitario=precio_unitario,
+                    descuento=detalle_data.get('descuento', 0)
+                )
+            
+            # Recalcular totales
+            instance.calcular_totales()
+        
+        return instance
 

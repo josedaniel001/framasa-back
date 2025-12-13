@@ -70,6 +70,14 @@ class Producto(models.Model):
     )
 
     precio_venta = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    precio_descuento = models.DecimalField(
+        max_digits=12, 
+        decimal_places=2, 
+        blank=True, 
+        null=True,
+        db_column='precio_descuento',
+        help_text='Precio con descuento aplicado (opcional)'
+    )
     costo_unitario = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     stock_actual = models.IntegerField(default=0)

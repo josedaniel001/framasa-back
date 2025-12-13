@@ -14,7 +14,7 @@ class AgregadoPiedrineraSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'codigo', 'nombre', 'descripcion',
             'tipo', 'granulometria',
-            'precio_venta_m3', 'costo_produccion_m3',
+            'precio_venta_m3', 'precio_descuento_m3', 'costo_produccion_m3',
             'stock_actual_m3', 'stock_minimo_m3',
             'ubicacion', 'humedad_porcentaje', 'calidad',
             'proveedor', 'fecha_ultima_entrada',
@@ -37,6 +37,7 @@ class AgregadoPiedrineraSerializer(serializers.ModelSerializer):
             'granulometria': data.get('granulometria', ''),
             # Campos en snake_case (para compatibilidad)
             'precio_venta_m3': float(data.get('precio_venta_m3', 0)),
+            'precio_descuento_m3': float(data.get('precio_descuento_m3')) if data.get('precio_descuento_m3') is not None else None,
             'costo_produccion_m3': float(data.get('costo_produccion_m3', 0)),
             'stock_actual_m3': float(data.get('stock_actual_m3', 0)),
             'stock_minimo_m3': float(data.get('stock_minimo_m3', 0)),
@@ -49,6 +50,7 @@ class AgregadoPiedrineraSerializer(serializers.ModelSerializer):
             'tiene_stock_bajo': data.get('tiene_stock_bajo', False),
             # Campos en camelCase (para visualización en frontend)
             'precioVentaPorMetroCubico': float(data.get('precio_venta_m3', 0)),
+            'precioDescuentoPorMetroCubico': float(data.get('precio_descuento_m3')) if data.get('precio_descuento_m3') is not None else None,
             'costoProduccionPorMetroCubico': float(data.get('costo_produccion_m3', 0)),
             'stockActualMetrosCubicos': float(data.get('stock_actual_m3', 0)),
             'stockMinimoMetrosCubicos': float(data.get('stock_minimo_m3', 0)),
@@ -67,7 +69,7 @@ class AgregadoPiedrineraListSerializer(serializers.ModelSerializer):
         model = AgregadoPiedrinera
         fields = (
             'id', 'codigo', 'nombre', 'tipo', 'granulometria',
-            'precio_venta_m3', 'stock_actual_m3', 'stock_minimo_m3',
+            'precio_venta_m3', 'precio_descuento_m3', 'stock_actual_m3', 'stock_minimo_m3',
             'activo', 'ubicacion', 'calidad', 'proveedor'
         )
 
@@ -80,6 +82,7 @@ class AgregadoPiedrineraListSerializer(serializers.ModelSerializer):
             'tipo': data.get('tipo', ''),
             'granulometria': data.get('granulometria', ''),
             'precioVenta': float(data.get('precio_venta_m3', 0)),
+            'precioDescuento': float(data.get('precio_descuento_m3')) if data.get('precio_descuento_m3') is not None else None,
             'stock': float(data.get('stock_actual_m3', 0)),
             'stockMinimo': float(data.get('stock_minimo_m3', 0)),
             'activo': data.get('activo', False),

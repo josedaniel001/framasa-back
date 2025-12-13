@@ -88,7 +88,7 @@ WSGI_APPLICATION = 'framasa_backend.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME', 'framasa_ahdb'),
+        'NAME': os.getenv('DB_NAME', 'framasa_db'),
         'USER': os.getenv('DB_USER', 'framasa_user'),
         'PASSWORD': os.getenv('DB_PASSWORD', 'framasapass'),
         'HOST': os.getenv('DB_HOST', 'localhost'),
@@ -152,6 +152,8 @@ REST_FRAMEWORK = {
     ),
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
+    # Serializar campos decimales como números, no como strings
+    'COERCE_DECIMAL_TO_STRING': False,
 }
 
 # JWT Settings

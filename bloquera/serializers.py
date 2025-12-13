@@ -14,7 +14,7 @@ class ProductoBloqueraSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'codigo', 'nombre', 'descripcion',
             'tipo_bloque', 'dimensiones',
-            'precio_unitario', 'costo_produccion',
+            'precio_unitario', 'precio_descuento', 'costo_produccion',
             'stock_actual', 'stock_minimo',
             'activo', 'tiene_stock_bajo',
             'created_at', 'updated_at'
@@ -35,6 +35,7 @@ class ProductoBloqueraSerializer(serializers.ModelSerializer):
             'tipoBloque': data.get('tipo_bloque', ''),
             'dimensiones': data.get('dimensiones', ''),
             'precioVentaUnitario': float(data.get('precio_unitario', 0)),
+            'precioDescuento': float(data.get('precio_descuento')) if data.get('precio_descuento') is not None else None,
             'costoProduccionUnitario': float(data.get('costo_produccion', 0)),
             'stockActual': data.get('stock_actual', 0),
             'stockMinimo': data.get('stock_minimo', 0),
@@ -45,6 +46,7 @@ class ProductoBloqueraSerializer(serializers.ModelSerializer):
             # También incluir campos en snake_case para compatibilidad
             'tipo_bloque': data.get('tipo_bloque', ''),
             'precio_unitario': float(data.get('precio_unitario', 0)),
+            'precio_descuento': float(data.get('precio_descuento')) if data.get('precio_descuento') is not None else None,
             'costo_produccion': float(data.get('costo_produccion', 0)),
             'stock_actual': data.get('stock_actual', 0),
             'stock_minimo': data.get('stock_minimo', 0),
@@ -59,7 +61,7 @@ class ProductoBloqueraListSerializer(serializers.ModelSerializer):
         model = ProductoBloquera
         fields = (
             'id', 'codigo', 'nombre', 'tipo_bloque', 'dimensiones',
-            'precio_unitario', 'stock_actual', 'activo'
+            'precio_unitario', 'precio_descuento', 'stock_actual', 'activo'
         )
 
     def to_representation(self, instance):
@@ -71,6 +73,7 @@ class ProductoBloqueraListSerializer(serializers.ModelSerializer):
             'tipoBloque': data.get('tipo_bloque', ''),
             'dimensiones': data.get('dimensiones', ''),
             'precioVentaUnitario': float(data.get('precio_unitario', 0)),
+            'precioDescuento': float(data.get('precio_descuento')) if data.get('precio_descuento') is not None else None,
             'stockActual': data.get('stock_actual', 0),
             'activo': data.get('activo', False),
         }

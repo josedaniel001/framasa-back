@@ -47,7 +47,7 @@ class ProductoSerializer(serializers.ModelSerializer):
             'categoria', 'categoria_id', 'categoria_nombre',
             'unidad_medida', 'unidad_medida_id', 'unidad_medida_nombre', 'unidad_medida_abreviatura',
             'proveedor', 'proveedor_id', 'proveedor_nombre',
-            'precio_venta', 'costo_unitario',
+            'precio_venta', 'precio_descuento', 'costo_unitario',
             'stock_actual', 'stock_minimo',
             'activo', 'tiene_stock_bajo',
             'created_at', 'updated_at'
@@ -72,6 +72,7 @@ class ProductoSerializer(serializers.ModelSerializer):
             'unidad_medida_id': instance.unidad_medida_id if hasattr(instance, 'unidad_medida_id') else None,
             'proveedor_id': instance.proveedor_id if hasattr(instance, 'proveedor_id') and instance.proveedor_id else None,
             'precio_venta': float(data.get('precio_venta', 0)),
+            'precio_descuento': float(data.get('precio_descuento')) if data.get('precio_descuento') is not None else None,
             'costo_unitario': float(data.get('costo_unitario', 0)),
             'stock_actual': data.get('stock_actual', 0),
             'stock_minimo': data.get('stock_minimo', 0),
@@ -79,6 +80,7 @@ class ProductoSerializer(serializers.ModelSerializer):
             # Campos en camelCase (para visualización)
             'categoria': data.get('categoria_nombre', ''),
             'precioVenta': float(data.get('precio_venta', 0)),
+            'precioDescuento': float(data.get('precio_descuento')) if data.get('precio_descuento') is not None else None,
             'costoUnitario': float(data.get('costo_unitario', 0)),
             'unidadMedida': data.get('unidad_medida_nombre', ''),
             'proveedor': data.get('proveedor_nombre', '') if data.get('proveedor_nombre') else None,
@@ -100,7 +102,7 @@ class ProductoListSerializer(serializers.ModelSerializer):
         model = Producto
         fields = (
             'id', 'codigo', 'nombre', 'categoria', 'proveedor',
-            'precio_venta', 'stock_actual', 'stock_minimo', 'activo'
+            'precio_venta', 'precio_descuento', 'stock_actual', 'stock_minimo', 'activo'
         )
 
     def to_representation(self, instance):
@@ -113,6 +115,8 @@ class ProductoListSerializer(serializers.ModelSerializer):
             'proveedor': data.get('proveedor') if data.get('proveedor') else None,
             'precioVenta': float(data.get('precio_venta', 0)),
             'precio_venta': float(data.get('precio_venta', 0)),
+            'precioDescuento': float(data.get('precio_descuento')) if data.get('precio_descuento') is not None else None,
+            'precio_descuento': float(data.get('precio_descuento')) if data.get('precio_descuento') is not None else None,
             'stockActual': data.get('stock_actual', 0),
             'stock_actual': data.get('stock_actual', 0),
             'stockMinimo': data.get('stock_minimo', 0),

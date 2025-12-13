@@ -311,7 +311,7 @@ class CotizacionViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_serializer_class(self):
-        if self.action == 'create':
+        if self.action in ['create', 'update', 'partial_update']:
             return CotizacionCreateSerializer
         return CotizacionSerializer
     

@@ -22,6 +22,14 @@ class AgregadoPiedrinera(models.Model):
         validators=[MinValueValidator(0)],
         db_column='precio_venta_m3'
     )
+    precio_descuento_m3 = models.DecimalField(
+        max_digits=12, 
+        decimal_places=2, 
+        blank=True, 
+        null=True,
+        db_column='precio_descuento_m3',
+        help_text='Precio con descuento aplicado por m³ (opcional)'
+    )
     costo_produccion_m3 = models.DecimalField(
         max_digits=12, 
         decimal_places=2, 
