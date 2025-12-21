@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Empleado, Asistencia, Nomina, NominaDetalle, PagoNomina
+from .models import Empleado, Asistencia, Nomina, NominaDetalle, PagoNomina, Cargo
 
 
 class EmpleadoSerializer(serializers.ModelSerializer):
@@ -10,7 +10,14 @@ class EmpleadoSerializer(serializers.ModelSerializer):
     # Propiedades de compatibilidad (read-only)
     codigo = serializers.CharField(source='codigo_empleado', required=False)
     cedula = serializers.CharField(source='dpi', required=False, allow_null=True)
-    cargo = serializers.CharField(source='puesto', required=False)
+    # Campo para manejar los cargos (ManyToMany)
+    cargos = serializers.PrimaryKeyRelatedField(
+        queryset=Cargo.objects.all(),
+        many=True,
+        required=False,
+        allow_empty=True
+    )
+    cargo = serializers.CharField(read_only=True)  # Propiedad computada
     salario = serializers.DecimalField(source='salario_base_q', max_digits=12, decimal_places=2, required=False)
     fecha_ingreso = serializers.DateField(source='fecha_contratacion', required=False)
 
@@ -18,8 +25,8 @@ class EmpleadoSerializer(serializers.ModelSerializer):
         model = Empleado
         fields = (
             'id', 'codigo_empleado', 'codigo', 'nombres', 'apellidos', 'nombre_completo',
-            'dpi', 'cedula', 'nit', 'telefono', 'email', 
-            'puesto', 'cargo', 'area_trabajo', 'turno', 'tipo_contrato',
+            'dpi', 'cedula', 'nit', 'telefono', 'email',
+            'cargos', 'cargo', 'area_trabajo', 'turno', 'tipo_contrato',
             'salario_base_q', 'salario', 'fecha_contratacion', 'fecha_ingreso',
             'fecha_baja', 'usuario_id', 'activo',
             'created_at', 'updated_at'
@@ -35,13 +42,12 @@ class EmpleadoSerializer(serializers.ModelSerializer):
             data['codigo_empleado'] = data.pop('codigo')
         if 'cedula' in data and 'dpi' not in data:
             data['dpi'] = data.pop('cedula')
-        if 'cargo' in data and 'puesto' not in data:
-            data['puesto'] = data.pop('cargo')
+        # Nota: 'cargo' ahora se maneja como ManyToMany 'cargos', no como campo único 'puesto'
         if 'salario' in data and 'salario_base_q' not in data:
             data['salario_base_q'] = data.pop('salario')
         if 'fecha_ingreso' in data and 'fecha_contratacion' not in data:
             data['fecha_contratacion'] = data.pop('fecha_ingreso')
-        
+
         return super().to_internal_value(data)
 
     def to_representation(self, instance):
@@ -515,3 +521,28 @@ class NominaStatsSerializer(serializers.Serializer):
     total_descuentos_global = serializers.DecimalField(max_digits=14, decimal_places=2)
     total_neto_global = serializers.DecimalField(max_digits=14, decimal_places=2)
 
+
+class CargoSerializer(serializers.ModelSerializer):
+    """
+    Serializer para cargos/puestos
+    """
+
+    class Meta:
+        model = Cargo
+        fields = (
+            'id', 'codigo', 'nombre', 'descripcion', 'activo',
+            'created_at', 'updated_at'
+        )
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        return {
+            'id': str(data.get('id', '')),
+            'codigo': data.get('codigo', ''),
+            'nombre': data.get('nombre', ''),
+            'descripcion': data.get('descripcion', ''),
+            'activo': data.get('activo', True),
+            'created_at': data.get('created_at', ''),
+            'updated_at': data.get('updated_at', ''),
+        }

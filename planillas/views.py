@@ -7,7 +7,7 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 from datetime import date, timedelta
 from decimal import Decimal
-from .models import Empleado, Asistencia, Nomina, NominaDetalle, PagoNomina
+from .models import Empleado, Asistencia, Nomina, NominaDetalle, PagoNomina, Cargo
 from .serializers import (
     EmpleadoSerializer,
     EmpleadoListSerializer,
@@ -21,6 +21,7 @@ from .serializers import (
     NominaDetalleListSerializer,
     NominaStatsSerializer,
     PagoNominaSerializer,
+    CargoSerializer,
     ESTADO_FRONTEND_TO_BACKEND
 )
 
@@ -1051,3 +1052,39 @@ class PagoNominaViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(pago)
         return Response(serializer.data)
+
+
+class CargoViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para cargos/puestos
+    Permite GET (listar), POST (crear), GET/{id} (detalle), PUT/{id} (actualizar), DELETE/{id} (eliminar)
+    """
+    queryset = Cargo.objects.all()
+    serializer_class = CargoSerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = None
+
+    def get_queryset(self):
+        """
+        Filtros opcionales:
+        - search: búsqueda por código o nombre
+        - activo: filtrar solo activos (por defecto True)
+        """
+        queryset = self.queryset
+
+        # Filtro por activo (por defecto solo activos)
+        activo = self.request.query_params.get('activo', 'true')
+        if activo.lower() == 'true':
+            queryset = queryset.filter(activo=True)
+        elif activo.lower() == 'false':
+            queryset = queryset.filter(activo=False)
+
+        # Búsqueda por texto
+        search = self.request.query_params.get('search', None)
+        if search:
+            queryset = queryset.filter(
+                Q(codigo__icontains=search) |
+                Q(nombre__icontains=search)
+            )
+
+        return queryset.order_by('nombre')

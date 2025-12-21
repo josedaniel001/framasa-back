@@ -8,8 +8,10 @@ from datetime import timedelta, datetime
 from decimal import Decimal
 
 from ferreteria.models import Producto, MovimientoInventario
-from bloquera.models import ProductoBloquera, MovimientoInventarioBloquera
+from bloquera.models import ProductoBloquera, MovimientoInventarioBloquera, OrdenProduccionBloquera
 from piedrinera.models import AgregadoPiedrinera, MovimientoInventarioPiedrinera
+from facturacion.models import Factura
+from taller.models import OrdenTrabajo
 
 from .serializers import (
     ProductoVendidoSerializer,
@@ -17,6 +19,25 @@ from .serializers import (
     EstadisticaPredictivaSerializer,
     ReporteInventarioUnificadoSerializer
 )
+
+
+def _tiempo_transcurrido(fecha):
+    """
+    Función auxiliar para calcular el tiempo transcurrido desde una fecha
+    """
+    ahora = timezone.now()
+    diferencia = ahora - fecha
+
+    if diferencia.days > 0:
+        return f"hace {diferencia.days} día{'s' if diferencia.days > 1 else ''}"
+    elif diferencia.seconds >= 3600:
+        horas = diferencia.seconds // 3600
+        return f"hace {horas} hora{'s' if horas > 1 else ''}"
+    elif diferencia.seconds >= 60:
+        minutos = diferencia.seconds // 60
+        return f"hace {minutos} minuto{'s' if minutos > 1 else ''}"
+    else:
+        return "ahora"
 
 
 class ReportesViewSet(viewsets.ViewSet):
@@ -443,3 +464,312 @@ class ReportesViewSet(viewsets.ViewSet):
 
         serializer = EstadisticaPredictivaSerializer(resultados, many=True)
         return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def dashboard_metrics(self, request):
+        """
+        Métricas principales para el Dashboard
+        """
+        hoy = timezone.now()
+        inicio_mes = hoy.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        # 1. Ventas del Mes - Suma de totales pagados de facturas del mes actual (excluyendo ANULADAS)
+        ventas_mes = Factura.objects.filter(
+            fecha_factura__gte=inicio_mes,
+            estado__in=['PENDIENTE', 'PARCIAL', 'PAGADA']
+        ).exclude(
+            estado='ANULADA'
+        ).aggregate(
+            total=Sum('total_pagado')
+        )['total'] or Decimal('0')
+
+        # 2. Órdenes Pendientes - Conteo de órdenes de trabajo y producción con estado PENDIENTE o EN_PROCESO/EN_PROGRESO
+        ordenes_taller_pendientes = OrdenTrabajo.objects.filter(
+            estado__in=['PENDIENTE', 'EN_PROGRESO']
+        ).aggregate(
+            total=Count('id')
+        )['total'] or 0
+
+        ordenes_bloquera_pendientes = OrdenProduccionBloquera.objects.filter(
+            estado__in=['PENDIENTE', 'EN_PROCESO']
+        ).aggregate(
+            total=Count('id')
+        )['total'] or 0
+
+        ordenes_pendientes = ordenes_taller_pendientes + ordenes_bloquera_pendientes
+
+        # 3. Productos en Stock - Conteo de productos con stock_actual > 0 y activos
+        productos_stock_ferreteria = Producto.objects.filter(
+            activo=True,
+            stock_actual__gt=0
+        ).aggregate(
+            total=Count('id')
+        )['total'] or 0
+
+        productos_stock_bloquera = ProductoBloquera.objects.filter(
+            activo=True,
+            stock_actual__gt=0
+        ).aggregate(
+            total=Count('id')
+        )['total'] or 0
+
+        productos_stock_piedrinera = AgregadoPiedrinera.objects.filter(
+            activo=True,
+            stock_actual_m3__gt=0
+        ).aggregate(
+            total=Count('id')
+        )['total'] or 0
+
+        productos_stock_total = productos_stock_ferreteria + productos_stock_bloquera + productos_stock_piedrinera
+
+        # 4. Alertas Activas - Conteo de productos con stock_actual <= stock_minimo
+        alertas_ferreteria = Producto.objects.filter(
+            activo=True,
+            stock_actual__lte=F('stock_minimo')
+        ).count()
+
+        alertas_bloquera = ProductoBloquera.objects.filter(
+            activo=True,
+            stock_actual__lte=F('stock_minimo')
+        ).count()
+
+        alertas_piedrinera = AgregadoPiedrinera.objects.filter(
+            activo=True,
+            stock_actual_m3__lte=F('stock_minimo_m3')
+        ).count()
+
+        alertas_total = alertas_ferreteria + alertas_bloquera + alertas_piedrinera
+
+        # Calcular cambios porcentuales (comparado con el mes anterior)
+        mes_anterior = (inicio_mes - timedelta(days=1)).replace(day=1)
+        ventas_mes_anterior = Factura.objects.filter(
+            fecha_factura__gte=mes_anterior,
+            fecha_factura__lt=inicio_mes,
+            estado__in=['PENDIENTE', 'PARCIAL', 'PAGADA']
+        ).aggregate(
+            total=Sum('total')
+        )['total'] or Decimal('0')
+
+        cambio_ventas = 0.0
+        if ventas_mes_anterior > 0:
+            cambio_ventas = float(((ventas_mes - ventas_mes_anterior) / ventas_mes_anterior) * 100)
+
+        # Órdenes del mes anterior
+        ordenes_mes_anterior = OrdenProduccionBloquera.objects.filter(
+            created_at__gte=mes_anterior,
+            created_at__lt=inicio_mes,
+            estado__in=['PENDIENTE', 'EN_PROCESO']
+        ).count()
+
+        cambio_ordenes = 0
+        if ordenes_mes_anterior > 0:
+            cambio_ordenes = ((ordenes_pendientes - ordenes_mes_anterior) / ordenes_mes_anterior) * 100
+
+        # Stock del mes anterior (esto es aproximado, usaríamos snapshots si existieran)
+        # Por simplicidad, calculamos un cambio basado en movimientos
+        movimientos_entrada_mes = (
+            MovimientoInventario.objects.filter(
+                tipo='ENTRADA',
+                fecha_movimiento__gte=inicio_mes
+            ).aggregate(total=Sum('cantidad'))['total'] or 0
+        ) + (
+            MovimientoInventarioBloquera.objects.filter(
+                tipo='ENTRADA',
+                fecha_movimiento__gte=inicio_mes
+            ).aggregate(total=Sum('cantidad'))['total'] or 0
+        )
+
+        movimientos_salida_mes = (
+            MovimientoInventario.objects.filter(
+                tipo='SALIDA',
+                fecha_movimiento__gte=inicio_mes
+            ).aggregate(total=Sum('cantidad'))['total'] or 0
+        ) + (
+            MovimientoInventarioBloquera.objects.filter(
+                tipo='SALIDA',
+                fecha_movimiento__gte=inicio_mes
+            ).aggregate(total=Sum('cantidad'))['total'] or 0
+        )
+
+        cambio_stock = 0.0
+        if movimientos_entrada_mes + movimientos_salida_mes > 0:
+            cambio_stock = ((movimientos_entrada_mes - movimientos_salida_mes) / (productos_stock_total + 1)) * 100
+
+        # Alertas del mes anterior (aproximado)
+        alertas_mes_anterior = alertas_total  # Por simplicidad, mantenemos el mismo valor
+
+        cambio_alertas = 0
+        if alertas_mes_anterior > 0:
+            cambio_alertas = ((alertas_total - alertas_mes_anterior) / alertas_mes_anterior) * 100
+
+        # 5. Actividad Reciente - Últimas 5 actividades del sistema
+        actividades_recientes = []
+
+        # Facturas recientes (últimas 24 horas)
+        facturas_recientes = Factura.objects.filter(
+            fecha_factura__gte=timezone.now() - timedelta(hours=24),
+            estado__in=['PENDIENTE', 'PARCIAL', 'PAGADA']
+        ).exclude(estado='ANULADA').order_by('-fecha_factura')[:3]
+
+        for factura in facturas_recientes:
+            actividades_recientes.append({
+                'id': f'factura-{factura.id}',
+                'tipo': 'info',
+                'titulo': 'Nueva Factura',
+                'descripcion': f'Factura {factura.numero_factura} - {factura.cliente.nombre}',
+                'monto': f'Q {factura.total_pagado:,.2f}',
+                'tiempo': _tiempo_transcurrido(factura.fecha_factura),
+                'icono': 'receipt'
+            })
+
+        # Órdenes de trabajo recientes (solo PENDIENTE o EN_PROGRESO)
+        ordenes_taller_recientes = OrdenTrabajo.objects.filter(
+            fecha_creacion_orden__gte=timezone.now() - timedelta(hours=24),
+            estado__in=['PENDIENTE', 'EN_PROGRESO']  # Solo órdenes activas
+        ).order_by('-fecha_creacion_orden')[:2]
+
+        for orden in ordenes_taller_recientes:
+            tipo_actividad = 'warning' if orden.estado == 'PENDIENTE' else 'info'
+            actividades_recientes.append({
+                'id': f'orden-taller-{orden.id}',
+                'tipo': tipo_actividad,
+                'titulo': 'Orden de Trabajo',
+                'descripcion': f'{orden.maquinaria.nombre} - {orden.get_tipo_mantenimiento_display()}',
+                'estado': orden.get_estado_display(),
+                'tiempo': _tiempo_transcurrido(orden.fecha_creacion_orden),
+                'icono': 'wrench'
+            })
+
+        # Órdenes de producción recientes (solo PENDIENTE o EN_PROCESO)
+        ordenes_produccion_recientes = OrdenProduccionBloquera.objects.filter(
+            created_at__gte=timezone.now() - timedelta(hours=24),
+            estado__in=['PENDIENTE', 'EN_PROCESO']  # Solo órdenes activas
+        ).order_by('-created_at')[:2]
+
+        for orden in ordenes_produccion_recientes:
+            tipo_actividad = 'warning' if orden.estado == 'PENDIENTE' else 'info'
+            actividades_recientes.append({
+                'id': f'orden-produccion-{orden.id}',
+                'tipo': tipo_actividad,
+                'titulo': 'Orden de Producción',
+                'descripcion': f'{orden.producto.nombre} - {orden.cantidad_solicitada} unidades',
+                'estado': orden.get_estado_display(),
+                'tiempo': _tiempo_transcurrido(orden.created_at),
+                'icono': 'factory'
+            })
+
+        # Productos con stock bajo (alertas)
+        productos_stock_bajo = []
+
+        # Ferretería
+        productos_bajo_ferreteria = Producto.objects.filter(
+            activo=True,
+            stock_actual__lte=F('stock_minimo')
+        ).order_by('stock_actual')[:2]
+
+        for producto in productos_bajo_ferreteria:
+            productos_stock_bajo.append({
+                'id': f'stock-ferreteria-{producto.id}',
+                'tipo': 'danger',
+                'titulo': 'Stock Bajo',
+                'descripcion': f'{producto.nombre} - Solo {producto.stock_actual} unidades',
+                'empresa': 'Ferretería',
+                'tiempo': 'Reciente',
+                'icono': 'alert-triangle'
+            })
+
+        # Bloquera
+        productos_bajo_bloquera = ProductoBloquera.objects.filter(
+            activo=True,
+            stock_actual__lte=F('stock_minimo')
+        ).order_by('stock_actual')[:2]
+
+        for producto in productos_bajo_bloquera:
+            productos_stock_bajo.append({
+                'id': f'stock-bloquera-{producto.id}',
+                'tipo': 'danger',
+                'titulo': 'Stock Bajo',
+                'descripcion': f'{producto.nombre} - Solo {producto.stock_actual} unidades',
+                'empresa': 'Bloquera',
+                'tiempo': 'Reciente',
+                'icono': 'alert-triangle'
+            })
+
+        # Piedrinera
+        productos_bajo_piedrinera = AgregadoPiedrinera.objects.filter(
+            activo=True,
+            stock_actual_m3__lte=F('stock_minimo_m3')
+        ).order_by('stock_actual_m3')[:2]
+
+        for producto in productos_bajo_piedrinera:
+            productos_stock_bajo.append({
+                'id': f'stock-piedrinera-{producto.id}',
+                'tipo': 'danger',
+                'titulo': 'Stock Bajo',
+                'descripcion': f'{producto.nombre} - Solo {producto.stock_actual_m3} m³',
+                'empresa': 'Piedrinera',
+                'tiempo': 'Reciente',
+                'icono': 'alert-triangle'
+            })
+
+        # Combinar y ordenar actividades (alertas primero, luego otras actividades)
+        actividades_recientes.extend(productos_stock_bajo)
+        actividades_recientes.sort(key=lambda x: (
+            0 if x['tipo'] == 'danger' else
+            1 if x['tipo'] == 'warning' else 2
+        ))
+
+        # Limitar a 8 actividades
+        actividades_recientes = actividades_recientes[:8]
+
+        data = {
+            'ventas_mes': {
+                'valor': float(ventas_mes),
+                'formateado': f'Q {ventas_mes:,.2f}',
+                'cambio_porcentaje': round(cambio_ventas, 1),
+                'cambio_formateado': f'{cambio_ventas:+.1f}%',
+                'tendencia': 'up' if cambio_ventas >= 0 else 'down'
+            },
+            'ordenes_pendientes': {
+                'valor': ordenes_pendientes,
+                'cambio': int(cambio_ordenes),
+                'cambio_formateado': f'{cambio_ordenes:+.0f}',
+                'tendencia': 'up' if cambio_ordenes >= 0 else 'down'
+            },
+            'productos_stock': {
+                'valor': productos_stock_total,
+                'formateado': f'{productos_stock_total:,}',
+                'cambio_porcentaje': round(cambio_stock, 1),
+                'cambio_formateado': f'{cambio_stock:+.1f}%',
+                'tendencia': 'up' if cambio_stock >= 0 else 'down'
+            },
+            'alertas_activas': {
+                'valor': alertas_total,
+                'cambio': int(cambio_alertas),
+                'cambio_formateado': f'{cambio_alertas:+.0f}',
+                'tendencia': 'up' if cambio_alertas >= 0 else 'down'
+            },
+            'actividades_recientes': actividades_recientes,
+            'resumen_por_empresa': {
+                'ferreteria': {
+                    'ventas_mes': float(Factura.objects.filter(
+                        empresa='FERRETERIA',
+                        fecha_factura__gte=inicio_mes,
+                        estado__in=['PENDIENTE', 'PARCIAL', 'PAGADA']
+                    ).exclude(estado='ANULADA').aggregate(total=Sum('total_pagado'))['total'] or Decimal('0')),
+                    'productos_stock': productos_stock_ferreteria,
+                    'alertas': alertas_ferreteria
+                },
+                'bloquera': {
+                    'ordenes_pendientes': ordenes_bloquera_pendientes,
+                    'productos_stock': productos_stock_bloquera,
+                    'alertas': alertas_bloquera
+                },
+                'piedrinera': {
+                    'productos_stock': productos_stock_piedrinera,
+                    'alertas': alertas_piedrinera
+                }
+            }
+        }
+
+        return Response(data)

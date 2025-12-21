@@ -4,17 +4,21 @@ from .models import Empleado, Asistencia, Nomina, NominaDetalle, PagoNomina
 
 @admin.register(Empleado)
 class EmpleadoAdmin(admin.ModelAdmin):
-    list_display = ['codigo_empleado', 'nombres', 'apellidos', 'puesto', 'activo']
-    list_filter = ['activo', 'puesto', 'area_trabajo']
+    list_display = ['codigo_empleado', 'nombres', 'apellidos', 'cargos_display', 'activo']
+    list_filter = ['activo', 'cargos', 'area_trabajo']
     search_fields = ['codigo_empleado', 'nombres', 'apellidos', 'dpi']
     ordering = ['codigo_empleado']
+
+    def cargos_display(self, obj):
+        return ", ".join(obj.cargos.values_list("nombre", flat=True))
+    cargos_display.short_description = "Cargos"
 
 
 @admin.register(Asistencia)
 class AsistenciaAdmin(admin.ModelAdmin):
     list_display = ['empleado', 'fecha', 'hora_entrada', 'hora_salida', 'estado', 'activo']
     list_filter = ['estado', 'activo', 'fecha']
-    search_fields = ['empleado__nombres', 'empleado__apellidos', 'empleado__codigo_empleado']
+    search_fields = ['empleado__nombres', 'empleado__apellidos', 'empleado__codigo_empleado', 'empleado__dpi']
     date_hierarchy = 'fecha'
     ordering = ['-fecha', '-created_at']
     raw_id_fields = ['empleado', 'usuario']
@@ -41,7 +45,7 @@ class NominaDetalleInline(admin.TabularInline):
 class NominaDetalleAdmin(admin.ModelAdmin):
     list_display = ['empleado', 'nomina', 'salario_neto', 'pagado', 'metodo_pago', 'estado', 'activo']
     list_filter = ['pagado', 'estado', 'metodo_pago', 'activo']
-    search_fields = ['empleado__nombres', 'empleado__apellidos', 'empleado__codigo_empleado']
+    search_fields = ['empleado__nombres', 'empleado__apellidos', 'empleado__codigo_empleado', 'empleado__dpi']
     ordering = ['nomina', 'empleado__codigo_empleado']
     raw_id_fields = ['nomina', 'empleado']
 
@@ -54,3 +58,4 @@ class PagoNominaAdmin(admin.ModelAdmin):
     date_hierarchy = 'fecha_pago'
     ordering = ['-fecha_pago']
     raw_id_fields = ['nomina_detalle', 'usuario']
+

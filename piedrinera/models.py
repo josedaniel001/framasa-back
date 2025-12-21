@@ -321,5 +321,206 @@ class MovimientoInventarioPiedrinera(models.Model):
             # Actualizar el stock del producto
             self.producto.stock_actual_m3 = self.stock_nuevo
             self.producto.save(update_fields=['stock_actual_m3', 'updated_at'])
-        
+
         super().save(*args, **kwargs)
+
+
+class EstadoProduccionPiedrinera(models.TextChoices):
+    """
+    Estados posibles para la producción de piedrinera
+    """
+    EN_PROCESO = 'EN_PROCESO', 'En Proceso'
+    COMPLETADO = 'COMPLETADO', 'Completado'
+    CANCELADO = 'CANCELADO', 'Cancelado'
+
+
+class ProduccionPiedrinera(models.Model):
+    """
+    Modelo para producción de agregados de piedrinera
+    """
+    # Identidad del lote
+    codigo_lote = models.CharField(
+        max_length=20,
+        unique=True,
+        db_column='codigo_lote',
+        help_text='Código único del lote de producción'
+    )
+
+    # Relación con agregados
+    agregado = models.ForeignKey(
+        AgregadoPiedrinera,
+        on_delete=models.RESTRICT,
+        related_name='producciones',
+        db_column='agregado_id',
+        help_text='Agregado que se está produciendo'
+    )
+
+    # Producción
+    fecha_produccion = models.DateField(
+        db_column='fecha_produccion',
+        help_text='Fecha en que se realizó la producción'
+    )
+    hora_inicio_produccion = models.TimeField(
+        db_column='hora_inicio_produccion',
+        help_text='Hora de inicio de la producción'
+    )
+    hora_fin_produccion = models.TimeField(
+        blank=True,
+        null=True,
+        db_column='hora_fin_produccion',
+        help_text='Hora de finalización de la producción (opcional)'
+    )
+
+    # Personal
+    supervisor = models.ForeignKey(
+        'planillas.Empleado',
+        on_delete=models.RESTRICT,
+        related_name='producciones_supervisadas',
+        db_column='supervisor_id',
+        help_text='Supervisor responsable de la producción'
+    )
+    operador = models.ForeignKey(
+        'planillas.Empleado',
+        on_delete=models.RESTRICT,
+        related_name='producciones_operadas',
+        db_column='operador_id',
+        help_text='Operador que realizó la producción'
+    )
+
+    # Volúmenes
+    volumen_planificado_m3 = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        db_column='volumen_planificado_m3',
+        help_text='Volumen planificado en metros cúbicos'
+    )
+    volumen_producido_m3 = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        db_column='volumen_producido_m3',
+        help_text='Volumen realmente producido en metros cúbicos'
+    )
+
+    # Costos
+    costo_total_q = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        db_column='costo_total_q',
+        help_text='Costo total de la producción en quetzales'
+    )
+
+    # Estado operativo del lote
+    estado = models.CharField(
+        max_length=20,
+        choices=EstadoProduccionPiedrinera.choices,
+        default=EstadoProduccionPiedrinera.EN_PROCESO,
+        db_column='estado',
+        help_text='Estado actual del lote de producción'
+    )
+
+    # Calidad del lote (Buena, Excelente, Regular, etc.)
+    calidad = models.CharField(
+        max_length=30,
+        blank=True,
+        null=True,
+        db_column='calidad',
+        help_text='Calidad del lote producido'
+    )
+
+    # Observaciones
+    observaciones = models.TextField(
+        blank=True,
+        null=True,
+        db_column='observaciones',
+        help_text='Observaciones adicionales sobre la producción'
+    )
+
+    # Equipos utilizados (IDs de maquinaria)
+    equipos_usados = models.JSONField(
+        default=list,
+        db_column='equipos_usados',
+        help_text='Lista de IDs de equipos utilizados en la producción'
+    )
+
+    # Auditoría
+    activo = models.BooleanField(
+        default=True,
+        db_column='activo',
+        help_text='Indica si el registro está activo'
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        db_column='created_at'
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        db_column='updated_at'
+    )
+
+    class Meta:
+        db_table = 'produccion_piedrinera'
+        verbose_name = 'Producción Piedrinera'
+        verbose_name_plural = 'Producciones Piedrinera'
+        ordering = ['-fecha_produccion', '-hora_inicio_produccion']
+        indexes = [
+            models.Index(fields=['fecha_produccion'], name='idx_prod_piedrinera_fecha'),
+            models.Index(fields=['estado'], name='idx_prod_piedrinera_estado'),
+            models.Index(fields=['agregado'], name='idx_prod_piedrinera_agregado'),
+            models.Index(fields=['supervisor'], name='idx_prod_piedrinera_supervisor'),
+            models.Index(fields=['operador'], name='idx_prod_piedrinera_operador'),
+            models.Index(fields=['equipos_usados'], name='idx_prod_piedrinera_equipos'),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(volumen_planificado_m3__gte=0, volumen_producido_m3__gte=0),
+                name='chk_volumen_nonneg'
+            ),
+            models.CheckConstraint(
+                check=models.Q(costo_total_q__gte=0),
+                name='chk_costo_nonneg'
+            ),
+            models.CheckConstraint(
+                check=models.Q(hora_fin_produccion__isnull=True) | models.Q(hora_fin_produccion__gt=models.F('hora_inicio_produccion')),
+                name='chk_horas_validas'
+            ),
+        ]
+
+    def __str__(self):
+        return f"Lote {self.codigo_lote} - {self.agregado.nombre} - {self.fecha_produccion}"
+
+    @property
+    def eficiencia_produccion(self):
+        """Calcula la eficiencia de producción (volumen producido / planificado)"""
+        if self.volumen_planificado_m3 > 0:
+            return (self.volumen_producido_m3 / self.volumen_planificado_m3) * 100
+        return 0
+
+    @property
+    def costo_por_m3(self):
+        """Calcula el costo por metro cúbico"""
+        if self.volumen_producido_m3 > 0:
+            return self.costo_total_q / self.volumen_producido_m3
+        return 0
+
+    @property
+    def duracion_produccion(self):
+        """Calcula la duración de la producción en horas"""
+        if self.hora_inicio_produccion and self.hora_fin_produccion:
+            from datetime import datetime, timedelta
+            # Crear objetos datetime combinando fecha y hora
+            inicio = datetime.combine(self.fecha_produccion, self.hora_inicio_produccion)
+            fin = datetime.combine(self.fecha_produccion, self.hora_fin_produccion)
+
+            # Si la hora de fin es anterior a la de inicio, asumimos que terminó al día siguiente
+            if fin <= inicio:
+                fin = fin + timedelta(days=1)
+
+            diferencia = fin - inicio
+            return round(diferencia.total_seconds() / 3600, 2)
+        return 0
