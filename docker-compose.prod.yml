@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    container_name: framasa_backend_prod
+    volumes:
+      - static_volume_prod:/app/staticfiles
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - framasa_network_prod
+    restart: unless-stopped
+
+volumes:
+  static_volume_prod:
+
+networks:
+  framasa_network_prod:
+    driver: bridge
+
