@@ -2,15 +2,17 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Q, F
-from .models import AgregadoPiedrinera, Camion, MovimientoInventarioPiedrinera, TipoMovimientoPiedrinera
+from django.db.models import Q, F, Sum, Count
+from .models import AgregadoPiedrinera, Camion, MovimientoInventarioPiedrinera, TipoMovimientoPiedrinera, ProduccionPiedrinera, EstadoProduccionPiedrinera
 from .serializers import (
     AgregadoPiedrineraSerializer,
     AgregadoPiedrineraListSerializer,
     AgregadosStatsSerializer,
     CamionSerializer,
     CamionListSerializer,
-    MovimientoInventarioPiedrineraSerializer
+    MovimientoInventarioPiedrineraSerializer,
+    ProduccionPiedrineraSerializer,
+    ProduccionPiedrineraListSerializer
 )
 
 
@@ -224,3 +226,110 @@ class MovimientoInventarioPiedrineraViewSet(viewsets.ModelViewSet):
             for choice in TipoMovimientoPiedrinera.choices
         ]
         return Response(tipos)
+
+
+class ProduccionPiedrineraViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para producción de piedrinera con filtros
+    Permite GET (listar), POST (crear), GET/{id} (detalle), PUT/{id} (actualizar), DELETE/{id} (eliminar)
+    """
+    queryset = ProduccionPiedrinera.objects.select_related('agregado', 'supervisor', 'operador').all()
+    permission_classes = [IsAuthenticated]
+    pagination_class = None  # Deshabilitar paginación, el frontend la maneja
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return ProduccionPiedrineraListSerializer
+        return ProduccionPiedrineraSerializer
+
+    def get_queryset(self):
+        """
+        Filtros opcionales:
+        - search: búsqueda por código_lote, agregado nombre
+        - estado: estado de producción o 'todos'
+        - agregado: ID del agregado
+        - fecha_desde: fecha desde (YYYY-MM-DD)
+        - fecha_hasta: fecha hasta (YYYY-MM-DD)
+        - activo: 'activo', 'inactivo' o 'todos'
+        """
+        queryset = self.queryset
+
+        # Búsqueda por texto
+        search = self.request.query_params.get('search', None)
+        if search:
+            queryset = queryset.filter(
+                Q(codigo_lote__icontains=search) |
+                Q(agregado__nombre__icontains=search) |
+                Q(agregado__codigo__icontains=search)
+            )
+
+        # Filtro por estado
+        estado = self.request.query_params.get('estado', 'todos')
+        if estado != 'todos':
+            queryset = queryset.filter(estado=estado)
+
+        # Filtro por agregado
+        agregado_id = self.request.query_params.get('agregado', None)
+        if agregado_id:
+            try:
+                queryset = queryset.filter(agregado_id=int(agregado_id))
+            except ValueError:
+                pass
+
+        # Filtro por rango de fechas
+        fecha_desde = self.request.query_params.get('fecha_desde', None)
+        fecha_hasta = self.request.query_params.get('fecha_hasta', None)
+        if fecha_desde:
+            from django.utils.dateparse import parse_date
+            fecha = parse_date(fecha_desde)
+            if fecha:
+                queryset = queryset.filter(fecha_produccion__gte=fecha)
+        if fecha_hasta:
+            from django.utils.dateparse import parse_date
+            fecha = parse_date(fecha_hasta)
+            if fecha:
+                queryset = queryset.filter(fecha_produccion__lte=fecha)
+
+        # Filtro por activo
+        activo = self.request.query_params.get('activo', 'todos')
+        if activo == 'activo':
+            queryset = queryset.filter(activo=True)
+        elif activo == 'inactivo':
+            queryset = queryset.filter(activo=False)
+
+        return queryset.order_by('-fecha_produccion', '-hora_inicio_produccion')
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """
+        Endpoint para obtener estadísticas de producción
+        Calcula estadísticas sobre TODAS las producciones activas
+        """
+        base_queryset = ProduccionPiedrinera.objects.filter(activo=True)
+
+        total_lotes = base_queryset.count()
+        lotes_completados = base_queryset.filter(estado=EstadoProduccionPiedrinera.COMPLETADO).count()
+        lotes_en_proceso = base_queryset.filter(estado=EstadoProduccionPiedrinera.EN_PROCESO).count()
+        
+        volumen_planificado = base_queryset.aggregate(
+            total=Sum('volumen_planificado_m3')
+        )['total'] or 0
+        
+        volumen_producido = base_queryset.aggregate(
+            total=Sum('volumen_producido_m3')
+        )['total'] or 0
+
+        eficiencia = 0
+        if volumen_planificado > 0:
+            eficiencia = (volumen_producido / volumen_planificado) * 100
+
+        stats = {
+            'total_lotes': total_lotes,
+            'lotes_completados': lotes_completados,
+            'lotes_en_proceso': lotes_en_proceso,
+            'volumen_planificado_m3': float(volumen_planificado),
+            'volumen_producido_m3': float(volumen_producido),
+            'eficiencia_porcentaje': float(eficiencia),
+        }
+
+        return Response(stats)

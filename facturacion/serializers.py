@@ -12,8 +12,9 @@ from decimal import Decimal
 
 class DetalleFacturaSerializer(serializers.ModelSerializer):
     """Serializer para detalles de factura"""
-    producto_id = serializers.IntegerField(write_only=True, required=True)
-    producto_empresa = serializers.ChoiceField(choices=EmpresaFactura.choices, write_only=True, required=True)
+    producto_id = serializers.IntegerField(required=False, allow_null=True)
+    producto_id_write = serializers.IntegerField(write_only=True, required=False)
+    producto_empresa = serializers.ChoiceField(choices=EmpresaFactura.choices, required=True)
     producto_codigo = serializers.CharField(read_only=True)
     producto_nombre = serializers.CharField(read_only=True)
     subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
@@ -21,18 +22,82 @@ class DetalleFacturaSerializer(serializers.ModelSerializer):
     class Meta:
         model = DetalleFactura
         fields = (
-            'id', 'factura', 'producto_id', 'producto_empresa',
+            'id', 'factura', 'producto_id', 'producto_id_write', 'producto_empresa',
             'producto_codigo', 'producto_nombre',
             'cantidad', 'precio_unitario', 'descuento', 'subtotal',
             'created_at', 'updated_at'
         )
         read_only_fields = ('id', 'factura', 'producto_codigo', 'producto_nombre', 'subtotal', 'created_at', 'updated_at')
     
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Si estamos en modo write, hacer que producto_id sea requerido si no hay producto_id_write
+        if self.context.get('request') and self.context['request'].method in ['POST', 'PUT', 'PATCH']:
+            # No hacerlo requerido aquí, se maneja en validate
+            pass
+    
+    def to_representation(self, instance):
+        """Agregar producto_id basado en object_id para lectura"""
+        representation = super().to_representation(instance)
+        representation['producto_id'] = instance.object_id
+        return representation
+    
+    def to_internal_value(self, data):
+        """Manejar producto_id_write como producto_id"""
+        # Log para ver qué datos llegan
+        print(f"\n[DetalleFacturaSerializer.to_internal_value] Datos recibidos:")
+        print(f"  Tipo: {type(data)}")
+        if isinstance(data, dict):
+            for key, value in data.items():
+                print(f"  {key}: {value} (tipo: {type(value).__name__})")
+        
+        # Si viene producto_id_write, convertirlo a producto_id
+        # Asegurarse de que data sea un diccionario mutable
+        if not isinstance(data, dict):
+            data = dict(data)
+        else:
+            data = data.copy()
+            
+        if 'producto_id_write' in data:
+            print(f"  [CONVERSIÓN] Convirtiendo producto_id_write ({data['producto_id_write']}) a producto_id")
+            data['producto_id'] = data.pop('producto_id_write')
+            print(f"  [DESPUÉS] producto_id ahora es: {data.get('producto_id')}")
+        
+        try:
+            result = super().to_internal_value(data)
+            print(f"  [RESULTADO] to_internal_value retornó: {result}")
+            return result
+        except Exception as e:
+            print(f"  [ERROR] Error en to_internal_value: {type(e).__name__}: {str(e)}")
+            raise
+    
     def validate(self, data):
         """Validar que el producto existe y tiene stock"""
-        producto_id = data.get('producto_id')
+        # producto_id puede venir directamente o desde producto_id_write (ya convertido en to_internal_value)
+        # También verificar si viene producto_id_write directamente (por si to_internal_value no se ejecutó)
+        producto_id = data.get('producto_id') or data.get('producto_id_write')
         empresa = data.get('producto_empresa')
         cantidad = data.get('cantidad')
+        
+        # Si no hay producto_id, es un error
+        if not producto_id and producto_id != 0:
+            raise serializers.ValidationError({
+                'producto_id': 'Este campo es requerido. Debe proporcionar producto_id o producto_id_write.'
+            })
+        
+        # Asegurar que producto_id sea un entero
+        try:
+            producto_id = int(producto_id)
+            # Si venía como producto_id_write, convertirlo a producto_id
+            if 'producto_id_write' in data:
+                data['producto_id'] = producto_id
+                data.pop('producto_id_write', None)
+            else:
+                data['producto_id'] = producto_id
+        except (ValueError, TypeError):
+            raise serializers.ValidationError({
+                'producto_id': 'El producto_id debe ser un número entero válido.'
+            })
         
         # Obtener el modelo según la empresa
         if empresa == EmpresaFactura.FERRETERIA:
@@ -73,8 +138,13 @@ class DetalleFacturaSerializer(serializers.ModelSerializer):
     
     def create(self, validated_data):
         """Crear detalle y actualizar información del producto"""
-        producto_id = validated_data.pop('producto_id')
+        producto_id = validated_data.pop('producto_id', None)
         empresa = validated_data.pop('producto_empresa')
+        
+        if not producto_id:
+            raise serializers.ValidationError({
+                'producto_id': 'Este campo es requerido.'
+            })
         
         # Obtener el ContentType según la empresa
         if empresa == EmpresaFactura.FERRETERIA:
@@ -147,9 +217,23 @@ class PagoSerializer(serializers.ModelSerializer):
 class FacturaSerializer(serializers.ModelSerializer):
     """Serializer para facturas"""
     detalles = DetalleFacturaSerializer(many=True, read_only=True)
+    detalles_write = DetalleFacturaSerializer(many=True, write_only=True, required=False, allow_null=True)
     pagos = PagoSerializer(many=True, read_only=True)
+    cliente = serializers.PrimaryKeyRelatedField(queryset=Cliente.objects.all(), required=False)
     cliente_nombre = serializers.CharField(source='cliente.nombre', read_only=True)
     cliente_nit = serializers.CharField(source='cliente.nit', read_only=True)
+    
+    def validate_detalles_write(self, value):
+        """Validar detalles_write antes de procesarlos"""
+        if value is None:
+            return value
+        
+        for detalle in value:
+            # Asegurar que producto_id_write se convierta a producto_id
+            if 'producto_id_write' in detalle and 'producto_id' not in detalle:
+                detalle['producto_id'] = detalle.pop('producto_id_write')
+        
+        return value
     usuario_nombre = serializers.CharField(source='usuario.username', read_only=True)
     estado_display = serializers.CharField(source='get_estado_display', read_only=True)
     empresa_display = serializers.CharField(source='get_empresa_display', read_only=True)
@@ -165,13 +249,13 @@ class FacturaSerializer(serializers.ModelSerializer):
             'observaciones',
             'usuario', 'usuario_id', 'usuario_nombre',
             'fecha_factura', 'fecha_vencimiento',
-            'detalles', 'pagos',
+            'detalles', 'detalles_write', 'pagos',
             'created_at', 'updated_at'
         )
         read_only_fields = (
             'id', 'numero_factura', 'subtotal', 'total',
-            'total_pagado', 'saldo_pendiente', 'estado',
-            'created_at', 'updated_at'
+            'total_pagado', 'saldo_pendiente',
+            'usuario', 'usuario_id', 'created_at', 'updated_at'
         )
     
     def create(self, validated_data):
@@ -207,6 +291,144 @@ class FacturaSerializer(serializers.ModelSerializer):
             validated_data['numero_factura'] = f"{prefijo}{nuevo_numero:06d}"
         
         return super().create(validated_data)
+    
+    def update(self, instance, validated_data):
+        """Actualizar factura y sus detalles"""
+        # Log para ver qué datos llegan
+        import json
+        print("=" * 80)
+        print("DATOS RECIBIDOS EN UPDATE DE FacturaSerializer:")
+        print("=" * 80)
+        print("validated_data completo:", json.dumps({
+            k: v if k != 'detalles_write' else [str(d) for d in v] if v else None
+            for k, v in validated_data.items()
+        }, indent=2, default=str))
+        detalles_data = validated_data.pop('detalles_write', None)
+        if detalles_data:
+            print("\nDetalles recibidos (detalles_write):")
+            for i, det in enumerate(detalles_data):
+                print(f"  Detalle {i + 1}:")
+                if isinstance(det, dict):
+                    for key, value in det.items():
+                        print(f"    {key}: {value} (tipo: {type(value).__name__})")
+                else:
+                    print(f"    Tipo: {type(det).__name__}, Valor: {det}")
+        print("=" * 80)
+        
+        # Actualizar campos básicos de la factura
+        instance.empresa = validated_data.get('empresa', instance.empresa)
+        
+        # Manejar cliente - el serializer ya lo convierte a objeto Cliente
+        if 'cliente' in validated_data:
+            cliente_value = validated_data.get('cliente')
+            if cliente_value is not None:
+                # Si es un objeto Cliente, obtener su ID
+                if hasattr(cliente_value, 'id'):
+                    instance.cliente_id = cliente_value.id
+                # Si es un entero, usarlo directamente
+                elif isinstance(cliente_value, int):
+                    instance.cliente_id = cliente_value
+                else:
+                    instance.cliente = cliente_value
+        
+        instance.descuento = validated_data.get('descuento', instance.descuento)
+        instance.observaciones = validated_data.get('observaciones', instance.observaciones)
+        instance.fecha_vencimiento = validated_data.get('fecha_vencimiento', instance.fecha_vencimiento)
+        if 'estado' in validated_data:
+            instance.estado = validated_data['estado']
+        
+        # Si se proporcionan detalles, actualizarlos
+        if detalles_data is not None:
+            request = self.context.get('request')
+            
+            # Eliminar detalles existentes
+            DetalleFactura.objects.filter(factura=instance).delete()
+            
+            # Crear nuevos detalles
+            for detalle_data_raw in detalles_data:
+                # Extraer producto_id desde producto_id_write o producto_id
+                producto_id = detalle_data_raw.get('producto_id') or detalle_data_raw.get('producto_id_write')
+                empresa_prod = detalle_data_raw.get('producto_empresa')
+                cantidad = detalle_data_raw.get('cantidad')
+                precio_unitario = detalle_data_raw.get('precio_unitario')
+                descuento = detalle_data_raw.get('descuento', 0)
+                
+                if not producto_id:
+                    raise serializers.ValidationError({
+                        'detalles_write': [{'producto_id': ['Este campo es requerido.']}]
+                    })
+                
+                if not empresa_prod:
+                    raise serializers.ValidationError({
+                        'detalles_write': [{'producto_empresa': ['Este campo es requerido.']}]
+                    })
+                
+                # Convertir a enteros/decimales
+                try:
+                    producto_id = int(producto_id)
+                    cantidad = Decimal(str(cantidad)) if cantidad else Decimal('0')
+                    precio_unitario = Decimal(str(precio_unitario)) if precio_unitario else Decimal('0')
+                    descuento = Decimal(str(descuento)) if descuento else Decimal('0')
+                except (ValueError, TypeError) as e:
+                    raise serializers.ValidationError({
+                        'detalles_write': [{'producto_id': [f'Error al convertir valores: {str(e)}']}]
+                    })
+                
+                # Validar stock usando el serializer
+                detalle_serializer = DetalleFacturaSerializer(context=self.context)
+                try:
+                    # Crear datos para validar stock
+                    validation_data = {
+                        'producto_id': producto_id,
+                        'producto_empresa': empresa_prod,
+                        'cantidad': cantidad,
+                    }
+                    detalle_serializer.validate(validation_data)
+                except serializers.ValidationError as e:
+                    raise serializers.ValidationError({
+                        'detalles_write': [e.detail]
+                    })
+                
+                # Obtener producto y content_type
+                if empresa_prod == EmpresaFactura.FERRETERIA:
+                    producto = Producto.objects.get(id=producto_id)
+                    content_type = ContentType.objects.get_for_model(Producto)
+                elif empresa_prod == EmpresaFactura.BLOQUERA:
+                    producto = ProductoBloquera.objects.get(id=producto_id)
+                    content_type = ContentType.objects.get_for_model(ProductoBloquera)
+                elif empresa_prod == EmpresaFactura.PIEDRINERA:
+                    producto = AgregadoPiedrinera.objects.get(id=producto_id)
+                    content_type = ContentType.objects.get_for_model(AgregadoPiedrinera)
+                else:
+                    continue
+                
+                # Obtener precio del producto si no se proporciona
+                if not precio_unitario:
+                    if empresa_prod == EmpresaFactura.FERRETERIA:
+                        precio_unitario = producto.precio_venta
+                    elif empresa_prod == EmpresaFactura.BLOQUERA:
+                        precio_unitario = producto.precio_unitario
+                    elif empresa_prod == EmpresaFactura.PIEDRINERA:
+                        precio_unitario = producto.precio_venta_m3
+                
+                # Crear detalle
+                DetalleFactura.objects.create(
+                    factura=instance,
+                    content_type=content_type,
+                    object_id=producto_id,
+                    producto_codigo=producto.codigo,
+                    producto_nombre=producto.nombre,
+                    producto_empresa=empresa_prod,
+                    cantidad=cantidad,
+                    precio_unitario=precio_unitario,
+                    descuento=descuento
+                )
+            
+            # Calcular totales
+            instance.calcular_totales()
+        
+        instance.save()
+        return instance
 
 
 class FacturaCreateSerializer(serializers.ModelSerializer):
@@ -237,7 +459,20 @@ class FacturaCreateSerializer(serializers.ModelSerializer):
     
     def create(self, validated_data):
         """Crear factura con detalles y actualizar stock"""
+        import json
+        print("=" * 80)
+        print("CREAR FACTURA - FacturaCreateSerializer.create()")
+        print("=" * 80)
+        print("validated_data recibido:", json.dumps({
+            k: v if k != 'detalles' else [str(d) for d in v] if v else None
+            for k, v in validated_data.items()
+        }, indent=2, default=str))
+        
         detalles_data = validated_data.pop('detalles')
+        print(f"\nDetalles a procesar: {len(detalles_data)}")
+        for i, det in enumerate(detalles_data):
+            print(f"  Detalle {i + 1}: {det}")
+        
         request = self.context.get('request')
         
         # Asignar usuario
@@ -346,6 +581,12 @@ class FacturaCreateSerializer(serializers.ModelSerializer):
         
         # Calcular totales
         factura.calcular_totales()
+        
+        print(f"\nFactura creada exitosamente:")
+        print(f"  ID: {factura.id}")
+        print(f"  Número: {factura.numero_factura}")
+        print(f"  Total: {factura.total}")
+        print("=" * 80)
         
         return factura
 

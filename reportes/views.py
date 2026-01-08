@@ -10,8 +10,9 @@ from decimal import Decimal
 from ferreteria.models import Producto, MovimientoInventario
 from bloquera.models import ProductoBloquera, MovimientoInventarioBloquera, OrdenProduccionBloquera
 from piedrinera.models import AgregadoPiedrinera, MovimientoInventarioPiedrinera
-from facturacion.models import Factura
+from facturacion.models import Factura, DetalleFactura, EmpresaFactura
 from taller.models import OrdenTrabajo
+from django.contrib.contenttypes.models import ContentType
 
 from .serializers import (
     ProductoVendidoSerializer,
@@ -56,17 +57,12 @@ class ReportesViewSet(viewsets.ViewSet):
         total_ferreteria = productos_ferreteria.count()
         activos_ferreteria = productos_ferreteria.filter(activo=True).count()
         inactivos_ferreteria = productos_ferreteria.filter(activo=False).count()
-        stock_ferreteria = productos_ferreteria.aggregate(
-            total=Sum('stock_actual')
-        )['total'] or 0
-        stock_minimo_ferreteria = productos_ferreteria.aggregate(
-            total=Sum('stock_minimo')
-        )['total'] or 0
         stock_bajo_ferreteria = productos_ferreteria.filter(
             stock_actual__lte=F('stock_minimo')
         ).count()
+        # Valor inventario = costo de compra (costo_unitario * stock_actual)
         valor_ferreteria = sum(
-            p.stock_actual * p.precio_venta for p in productos_ferreteria
+            float(p.stock_actual) * float(p.costo_unitario) for p in productos_ferreteria
         )
 
         # Bloquera
@@ -74,17 +70,12 @@ class ReportesViewSet(viewsets.ViewSet):
         total_bloquera = productos_bloquera.count()
         activos_bloquera = productos_bloquera.filter(activo=True).count()
         inactivos_bloquera = productos_bloquera.filter(activo=False).count()
-        stock_bloquera = productos_bloquera.aggregate(
-            total=Sum('stock_actual')
-        )['total'] or 0
-        stock_minimo_bloquera = productos_bloquera.aggregate(
-            total=Sum('stock_minimo')
-        )['total'] or 0
         stock_bajo_bloquera = productos_bloquera.filter(
             stock_actual__lte=F('stock_minimo')
         ).count()
+        # Valor inventario = costo de producción (costo_produccion * stock_actual)
         valor_bloquera = sum(
-            p.stock_actual * p.precio_unitario for p in productos_bloquera
+            float(p.stock_actual) * float(p.costo_produccion) for p in productos_bloquera
         )
 
         # Piedrinera
@@ -92,17 +83,12 @@ class ReportesViewSet(viewsets.ViewSet):
         total_piedrinera = productos_piedrinera.count()
         activos_piedrinera = productos_piedrinera.filter(activo=True).count()
         inactivos_piedrinera = productos_piedrinera.filter(activo=False).count()
-        stock_piedrinera = productos_piedrinera.aggregate(
-            total=Sum('stock_actual_m3')
-        )['total'] or Decimal('0')
-        stock_minimo_piedrinera = productos_piedrinera.aggregate(
-            total=Sum('stock_minimo_m3')
-        )['total'] or Decimal('0')
         stock_bajo_piedrinera = productos_piedrinera.filter(
             stock_actual_m3__lte=F('stock_minimo_m3')
         ).count()
+        # Valor inventario = costo de producción (costo_produccion_m3 * stock_actual_m3)
         valor_piedrinera = sum(
-            float(p.stock_actual_m3) * float(p.precio_venta_m3) for p in productos_piedrinera
+            float(p.stock_actual_m3) * float(p.costo_produccion_m3) for p in productos_piedrinera
         )
 
         # Totales generales
@@ -126,8 +112,6 @@ class ReportesViewSet(viewsets.ViewSet):
                     'total_productos': total_ferreteria,
                     'productos_activos': activos_ferreteria,
                     'productos_inactivos': inactivos_ferreteria,
-                    'stock_total': stock_ferreteria,
-                    'stock_minimo_total': stock_minimo_ferreteria,
                     'productos_stock_bajo': stock_bajo_ferreteria,
                     'valor_inventario_estimado': float(valor_ferreteria),
                     'unidades': 'unidades'
@@ -137,8 +121,6 @@ class ReportesViewSet(viewsets.ViewSet):
                     'total_productos': total_bloquera,
                     'productos_activos': activos_bloquera,
                     'productos_inactivos': inactivos_bloquera,
-                    'stock_total': stock_bloquera,
-                    'stock_minimo_total': stock_minimo_bloquera,
                     'productos_stock_bajo': stock_bajo_bloquera,
                     'valor_inventario_estimado': float(valor_bloquera),
                     'unidades': 'unidades'
@@ -148,10 +130,8 @@ class ReportesViewSet(viewsets.ViewSet):
                     'total_productos': total_piedrinera,
                     'productos_activos': activos_piedrinera,
                     'productos_inactivos': inactivos_piedrinera,
-                    'stock_total': float(stock_piedrinera),
-                    'stock_minimo_total': float(stock_minimo_piedrinera),
                     'productos_stock_bajo': stock_bajo_piedrinera,
-                    'valor_inventario_estimado': valor_piedrinera,
+                    'valor_inventario_estimado': float(valor_piedrinera),
                     'unidades': 'm³'
                 }
             ],
@@ -269,199 +249,171 @@ class ReportesViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def estadisticas_predictivas(self, request):
         """
-        Estadísticas predictivas para productos
-        Parámetros: empresa (ferreteria, bloquera, piedrinera), dias_analisis (default: 30)
+        Estadísticas predictivas por producto
+        Parámetros: 
+        - dias_analisis (default: 30)
+        - empresa: 'ferreteria', 'bloquera', 'piedrinera' o 'todas' (default: 'todas')
+        Retorna datos por producto con ventas, proyecciones y riesgo de stock
         """
-        empresa = request.query_params.get('empresa', 'todas')
-        dias_analisis = int(request.query_params.get('dias_analisis', 30))
-
+        try:
+            dias_analisis = int(request.query_params.get('dias_analisis', 30))
+            if dias_analisis <= 0:
+                dias_analisis = 30
+        except (ValueError, TypeError):
+            dias_analisis = 30
+        
+        empresa_filtro = request.query_params.get('empresa', 'todas')
+        if empresa_filtro not in ['ferreteria', 'bloquera', 'piedrinera', 'todas']:
+            empresa_filtro = 'todas'
+            
         fecha_limite = timezone.now() - timedelta(days=dias_analisis)
+        mitad = dias_analisis // 2
+        fecha_mitad = fecha_limite + timedelta(days=mitad)
+        dias_futuros = 30  # Proyección a 30 días
+        
+        # Mapeo de empresas
+        empresas_map = {
+            'ferreteria': ('FERRETERIA', Producto, MovimientoInventario, 'stock_actual'),
+            'bloquera': ('BLOQUERA', ProductoBloquera, MovimientoInventarioBloquera, 'stock_actual'),
+            'piedrinera': ('PIEDRINERA', AgregadoPiedrinera, MovimientoInventarioPiedrinera, 'stock_actual_m3')
+        }
+        
         resultados = []
-
-        # Ferretería
-        if empresa in ['todas', 'ferreteria']:
-            productos = Producto.objects.filter(activo=True)
-            for producto in productos:
-                movimientos = MovimientoInventario.objects.filter(
-                    producto=producto,
-                    tipo='SALIDA',
-                    fecha_movimiento__gte=fecha_limite
-                )
-
-                total_ventas = movimientos.aggregate(
-                    total=Sum('cantidad')
-                )['total'] or 0
-
-                if total_ventas > 0:
-                    promedio_diario = Decimal(str(total_ventas)) / Decimal(str(dias_analisis))
-                    promedio_semanal = promedio_diario * 7
-                    promedio_mensual = promedio_diario * 30
-
-                    if promedio_diario > 0:
-                        dias_restantes = int(producto.stock_actual / promedio_diario)
-                    else:
-                        dias_restantes = None
-
-                    # Determinar tendencia (comparar primera mitad vs segunda mitad)
-                    mitad = dias_analisis // 2
-                    primera_mitad = movimientos.filter(
-                        fecha_movimiento__gte=fecha_limite + timedelta(days=mitad)
-                    ).aggregate(total=Sum('cantidad'))['total'] or 0
-                    segunda_mitad = movimientos.filter(
-                        fecha_movimiento__lt=fecha_limite + timedelta(days=mitad)
-                    ).aggregate(total=Sum('cantidad'))['total'] or 0
-
-                    if primera_mitad > segunda_mitad * 1.1:
-                        tendencia = 'creciente'
-                    elif segunda_mitad > primera_mitad * 1.1:
-                        tendencia = 'decreciente'
-                    else:
-                        tendencia = 'estable'
-                else:
-                    promedio_diario = None
-                    promedio_semanal = None
-                    promedio_mensual = None
-                    dias_restantes = None
-                    tendencia = None
-
-                resultados.append({
-                    'empresa': 'ferreteria',
-                    'producto_id': producto.id,
-                    'producto_codigo': producto.codigo,
-                    'producto_nombre': producto.nombre,
-                    'stock_actual': producto.stock_actual,
-                    'stock_minimo': producto.stock_minimo,
-                    'promedio_ventas_diarias': float(promedio_diario) if promedio_diario else None,
-                    'promedio_ventas_semanales': float(promedio_semanal) if promedio_semanal else None,
-                    'promedio_ventas_mensuales': float(promedio_mensual) if promedio_mensual else None,
-                    'dias_restantes_estimados': dias_restantes,
-                    'necesita_reposicion': producto.stock_actual <= producto.stock_minimo,
-                    'tendencia': tendencia,
-                    'unidades': 'unidades'
-                })
-
-        # Bloquera
-        if empresa in ['todas', 'bloquera']:
-            productos = ProductoBloquera.objects.filter(activo=True)
-            for producto in productos:
-                movimientos = MovimientoInventarioBloquera.objects.filter(
-                    producto=producto,
-                    tipo='SALIDA',
-                    fecha_movimiento__gte=fecha_limite
-                )
-
-                total_ventas = movimientos.aggregate(
-                    total=Sum('cantidad')
-                )['total'] or 0
-
-                if total_ventas > 0:
-                    promedio_diario = Decimal(str(total_ventas)) / Decimal(str(dias_analisis))
-                    promedio_semanal = promedio_diario * 7
-                    promedio_mensual = promedio_diario * 30
-
-                    if promedio_diario > 0:
-                        dias_restantes = int(producto.stock_actual / promedio_diario)
-                    else:
-                        dias_restantes = None
-
-                    mitad = dias_analisis // 2
-                    primera_mitad = movimientos.filter(
-                        fecha_movimiento__gte=fecha_limite + timedelta(days=mitad)
-                    ).aggregate(total=Sum('cantidad'))['total'] or 0
-                    segunda_mitad = movimientos.filter(
-                        fecha_movimiento__lt=fecha_limite + timedelta(days=mitad)
-                    ).aggregate(total=Sum('cantidad'))['total'] or 0
-
-                    if primera_mitad > segunda_mitad * 1.1:
-                        tendencia = 'creciente'
-                    elif segunda_mitad > primera_mitad * 1.1:
-                        tendencia = 'decreciente'
-                    else:
-                        tendencia = 'estable'
-                else:
-                    promedio_diario = None
-                    promedio_semanal = None
-                    promedio_mensual = None
-                    dias_restantes = None
-                    tendencia = None
-
-                resultados.append({
-                    'empresa': 'bloquera',
-                    'producto_id': producto.id,
-                    'producto_codigo': producto.codigo,
-                    'producto_nombre': producto.nombre,
-                    'stock_actual': producto.stock_actual,
-                    'stock_minimo': producto.stock_minimo,
-                    'promedio_ventas_diarias': float(promedio_diario) if promedio_diario else None,
-                    'promedio_ventas_semanales': float(promedio_semanal) if promedio_semanal else None,
-                    'promedio_ventas_mensuales': float(promedio_mensual) if promedio_mensual else None,
-                    'dias_restantes_estimados': dias_restantes,
-                    'necesita_reposicion': producto.stock_actual <= producto.stock_minimo,
-                    'tendencia': tendencia,
-                    'unidades': 'unidades'
-                })
-
-        # Piedrinera
-        if empresa in ['todas', 'piedrinera']:
-            productos = AgregadoPiedrinera.objects.filter(activo=True)
-            for producto in productos:
-                movimientos = MovimientoInventarioPiedrinera.objects.filter(
-                    producto=producto,
-                    tipo='SALIDA',
-                    fecha_movimiento__gte=fecha_limite
-                )
-
-                total_ventas = movimientos.aggregate(
-                    total=Sum('cantidad')
-                )['total'] or Decimal('0')
-
-                if total_ventas > 0:
-                    promedio_diario = total_ventas / Decimal(str(dias_analisis))
-                    promedio_semanal = promedio_diario * 7
-                    promedio_mensual = promedio_diario * 30
-
-                    if promedio_diario > 0:
-                        dias_restantes = int(float(producto.stock_actual_m3) / float(promedio_diario))
-                    else:
-                        dias_restantes = None
-
-                    mitad = dias_analisis // 2
-                    primera_mitad = movimientos.filter(
-                        fecha_movimiento__gte=fecha_limite + timedelta(days=mitad)
-                    ).aggregate(total=Sum('cantidad'))['total'] or Decimal('0')
-                    segunda_mitad = movimientos.filter(
-                        fecha_movimiento__lt=fecha_limite + timedelta(days=mitad)
-                    ).aggregate(total=Sum('cantidad'))['total'] or Decimal('0')
-
-                    if primera_mitad > segunda_mitad * Decimal('1.1'):
-                        tendencia = 'creciente'
-                    elif segunda_mitad > primera_mitad * Decimal('1.1'):
-                        tendencia = 'decreciente'
-                    else:
-                        tendencia = 'estable'
-                else:
-                    promedio_diario = None
-                    promedio_semanal = None
-                    promedio_mensual = None
-                    dias_restantes = None
-                    tendencia = None
-
-                resultados.append({
-                    'empresa': 'piedrinera',
-                    'producto_id': producto.id,
-                    'producto_codigo': producto.codigo,
-                    'producto_nombre': producto.nombre,
-                    'stock_actual': float(producto.stock_actual_m3),
-                    'stock_minimo': float(producto.stock_minimo_m3),
-                    'promedio_ventas_diarias': float(promedio_diario) if promedio_diario else None,
-                    'promedio_ventas_semanales': float(promedio_semanal) if promedio_semanal else None,
-                    'promedio_ventas_mensuales': float(promedio_mensual) if promedio_mensual else None,
-                    'dias_restantes_estimados': dias_restantes,
-                    'necesita_reposicion': producto.stock_actual_m3 <= producto.stock_minimo_m3,
-                    'tendencia': tendencia,
-                    'unidades': 'm³'
-                })
-
+        
+        # Determinar qué empresas procesar
+        empresas_a_procesar = [empresa_filtro] if empresa_filtro != 'todas' else ['ferreteria', 'bloquera', 'piedrinera']
+        
+        for empresa_key in empresas_a_procesar:
+            try:
+                empresa_factura, ProductoModel, MovimientoModel, campo_stock = empresas_map[empresa_key]
+                
+                # Obtener todos los productos activos de esta empresa
+                productos = ProductoModel.objects.filter(activo=True)
+                
+                # Obtener ContentType para esta empresa
+                content_type = ContentType.objects.get_for_model(ProductoModel)
+                
+                for producto in productos:
+                    try:
+                        # 1. VENTAS - Suma de subtotal de DetalleFactura para este producto
+                        detalles_periodo = DetalleFactura.objects.filter(
+                            content_type=content_type,
+                            object_id=producto.id,
+                            factura__fecha_factura__gte=fecha_limite,
+                            factura__estado__in=['PENDIENTE', 'PARCIAL', 'PAGADA']
+                        ).exclude(factura__estado='ANULADA')
+                        
+                        ventas_total = detalles_periodo.aggregate(
+                            total=Sum('subtotal')
+                        )['total'] or Decimal('0')
+                        
+                        # Cantidad total vendida (en unidades)
+                        cantidad_total_vendida = detalles_periodo.aggregate(
+                            total=Sum('cantidad')
+                        )['total'] or Decimal('0')
+                        
+                        # 2. PROMEDIO DIARIO (en Quetzales)
+                        prom_diario_q = float(ventas_total) / dias_analisis if dias_analisis > 0 else 0.0
+                        
+                        # Promedio diario en cantidad (unidades)
+                        prom_diario_cantidad = float(cantidad_total_vendida) / dias_analisis if dias_analisis > 0 else 0.0
+                        
+                        # 3. TENDENCIA - Comparar primera mitad vs segunda mitad (en cantidad)
+                        primera_mitad_cantidad = detalles_periodo.filter(
+                            factura__fecha_factura__gte=fecha_limite,
+                            factura__fecha_factura__lt=fecha_mitad
+                        ).aggregate(total=Sum('cantidad'))['total'] or Decimal('0')
+                        
+                        segunda_mitad_cantidad = detalles_periodo.filter(
+                            factura__fecha_factura__gte=fecha_mitad
+                        ).aggregate(total=Sum('cantidad'))['total'] or Decimal('0')
+                        
+                        # Promedios por mitad del período (en cantidad)
+                        dias_primera_mitad = mitad if mitad > 0 else 1
+                        dias_segunda_mitad = dias_analisis - mitad if (dias_analisis - mitad) > 0 else 1
+                        
+                        prom_prim = float(primera_mitad_cantidad) / dias_primera_mitad if dias_primera_mitad > 0 else 0.0
+                        prom_ult = float(segunda_mitad_cantidad) / dias_segunda_mitad if dias_segunda_mitad > 0 else 0.0
+                        
+                        # Calcular tendencia
+                        if prom_prim > 0:
+                            tendencia = (prom_ult - prom_prim) / prom_prim
+                        else:
+                            tendencia = 0.0
+                        
+                        # 4. FACTOR según tendencia
+                        if tendencia > 0.10:
+                            factor = 1.10
+                        elif tendencia > 0.05:
+                            factor = 1.05
+                        elif tendencia < -0.10:
+                            factor = 0.90
+                        elif tendencia < -0.05:
+                            factor = 0.95
+                        else:
+                            factor = 1.00
+                        
+                        # 5. PROYECCIÓN 30 DÍAS (en Quetzales)
+                        proyeccion_30d = prom_diario_q * dias_futuros * factor
+                        
+                        # 6. STOCK ACTUAL
+                        stock_actual = float(getattr(producto, campo_stock)) if getattr(producto, campo_stock) is not None else 0.0
+                        
+                        # 7. DÍAS STOCK (usando cantidad vendida por día, no valor en dinero)
+                        if prom_diario_cantidad > 0 and stock_actual > 0:
+                            dias_stock = int(stock_actual / prom_diario_cantidad)
+                        else:
+                            dias_stock = None
+                        
+                        # 8. RIESGO STOCK
+                        if dias_stock is None:
+                            riesgo_stock = 'Sin datos'
+                        elif dias_stock < 10:
+                            riesgo_stock = 'Alto'
+                        elif dias_stock <= 30:
+                            riesgo_stock = 'Medio'
+                        else:
+                            riesgo_stock = 'Bajo'
+                        
+                        # 9. RECOMENDACIÓN
+                        if riesgo_stock == 'Alto':
+                            recomendacion = 'Reponer productos de rotación urgente'
+                        elif riesgo_stock == 'Medio':
+                            if tendencia > 0.05:
+                                recomendacion = 'Aumentar inventario por demanda creciente'
+                            else:
+                                recomendacion = 'Reponer productos de rotación'
+                        elif riesgo_stock == 'Bajo':
+                            recomendacion = 'Mantener niveles actuales'
+                        else:
+                            recomendacion = 'Revisar datos de consumo'
+                        
+                        resultados.append({
+                            'producto_id': producto.id,
+                            'producto_codigo': producto.codigo,
+                            'producto_nombre': producto.nombre,
+                            'empresa': empresa_key,
+                            'periodo': dias_analisis,
+                            'ventas_q': round(float(ventas_total), 2),
+                            'prom_diario_q': round(prom_diario_q, 2),
+                            'tendencia_porcentaje': round(tendencia * 100, 1),
+                            'proyeccion_30d_q': round(proyeccion_30d, 2),
+                            'stock_actual': round(stock_actual, 2) if stock_actual > 0 else None,
+                            'dias_stock': dias_stock,
+                            'riesgo_stock': riesgo_stock,
+                            'recomendacion': recomendacion
+                        })
+                    except Exception as e:
+                        import traceback
+                        print(f"Error procesando producto {producto.id}: {str(e)}")
+                        print(traceback.format_exc())
+                        continue
+            except Exception as e:
+                import traceback
+                print(f"Error procesando empresa {empresa_key}: {str(e)}")
+                print(traceback.format_exc())
+                continue
+        
         serializer = EstadisticaPredictivaSerializer(resultados, many=True)
         return Response(serializer.data)
 

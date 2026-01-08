@@ -461,14 +461,29 @@ class LoteProduccionBloquera(models.Model):
             cantidad_buena = self.cantidad_producida - self.cantidad_defectuosa
             if cantidad_buena > 0:
                 # Crear movimiento de inventario para entrada de producción
-                MovimientoInventarioBloquera.objects.create(
-                    producto=self.orden.producto,
-                    tipo='ENTRADA',
-                    cantidad=cantidad_buena,
-                    motivo=f'Producción lote {self.fecha_lote}',
-                    observaciones=f'Lote de orden {self.orden.codigo} - Calidad: {self.get_calidad_display()}',
-                    usuario_id=1  # TODO: Obtener del contexto de usuario actual
-                )
+                # Obtener el usuario del contexto si está disponible
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                try:
+                    # Intentar obtener el usuario del contexto (si está disponible)
+                    usuario = getattr(self, '_usuario_context', None)
+                    if not usuario:
+                        # Si no hay contexto, usar el primer usuario activo como fallback
+                        usuario = User.objects.filter(is_active=True).first()
+                    if usuario:
+                        MovimientoInventarioBloquera.objects.create(
+                            producto=self.orden.producto,
+                            tipo='ENTRADA',
+                            cantidad=cantidad_buena,
+                            motivo=f'Producción lote {self.fecha_lote}',
+                            observaciones=f'Lote de orden {self.orden.codigo} - Calidad: {self.get_calidad_display()}',
+                            usuario=usuario
+                        )
+                except Exception as e:
+                    # Si hay error al crear el movimiento, loguear pero no fallar el guardado del lote
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f'No se pudo crear movimiento de inventario para lote {self.id}: {str(e)}')
 
         super().save(*args, **kwargs)
 

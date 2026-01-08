@@ -32,11 +32,16 @@ RUN mkdir -p /app/staticfiles
 # Exponer el puerto
 EXPOSE 8000
 
-# Script de inicio
+# Script de inicio (convertir CRLF a LF para compatibilidad Windows/Linux)
 COPY docker-entrypoint.sh /app/
-RUN chmod +x /app/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh && chmod +x /app/docker-entrypoint.sh
+
+# Copiar script wrapper que convierte el entrypoint en tiempo de ejecución
+# (necesario cuando se monta un volumen que sobrescribe el archivo)
+COPY entrypoint-wrapper.sh /app/
+RUN sed -i 's/\r$//' /app/entrypoint-wrapper.sh && chmod +x /app/entrypoint-wrapper.sh
 
 # Comando por defecto
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+ENTRYPOINT ["/app/entrypoint-wrapper.sh"]
 CMD ["gunicorn", "framasa_backend.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]
 

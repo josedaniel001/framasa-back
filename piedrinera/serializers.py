@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import AgregadoPiedrinera, Camion, MovimientoInventarioPiedrinera, TipoMovimientoPiedrinera
+from .models import AgregadoPiedrinera, Camion, MovimientoInventarioPiedrinera, TipoMovimientoPiedrinera, ProduccionPiedrinera, EstadoProduccionPiedrinera
 
 
 class AgregadoPiedrineraSerializer(serializers.ModelSerializer):
@@ -69,7 +69,8 @@ class AgregadoPiedrineraListSerializer(serializers.ModelSerializer):
         model = AgregadoPiedrinera
         fields = (
             'id', 'codigo', 'nombre', 'tipo', 'granulometria',
-            'precio_venta_m3', 'precio_descuento_m3', 'stock_actual_m3', 'stock_minimo_m3',
+            'precio_venta_m3', 'precio_descuento_m3', 'costo_produccion_m3',
+            'stock_actual_m3', 'stock_minimo_m3',
             'activo', 'ubicacion', 'calidad', 'proveedor'
         )
 
@@ -83,8 +84,14 @@ class AgregadoPiedrineraListSerializer(serializers.ModelSerializer):
             'granulometria': data.get('granulometria', ''),
             'precioVenta': float(data.get('precio_venta_m3', 0)),
             'precioDescuento': float(data.get('precio_descuento_m3')) if data.get('precio_descuento_m3') is not None else None,
+            'costo_produccion_m3': float(data.get('costo_produccion_m3', 0)),
+            'costoProduccionPorMetroCubico': float(data.get('costo_produccion_m3', 0)),
             'stock': float(data.get('stock_actual_m3', 0)),
+            'stock_actual_m3': float(data.get('stock_actual_m3', 0)),
+            'stockActualMetrosCubicos': float(data.get('stock_actual_m3', 0)),
             'stockMinimo': float(data.get('stock_minimo_m3', 0)),
+            'stock_minimo_m3': float(data.get('stock_minimo_m3', 0)),
+            'stockMinimoMetrosCubicos': float(data.get('stock_minimo_m3', 0)),
             'activo': data.get('activo', False),
             'ubicacion': data.get('ubicacion', ''),
             'calidad': data.get('calidad', ''),
@@ -279,5 +286,160 @@ class MovimientoInventarioPiedrineraSerializer(serializers.ModelSerializer):
             'fecha_movimiento': data.get('fecha_movimiento'),
             'created_at': data.get('created_at'),
             'updated_at': data.get('updated_at'),
+        }
+
+
+class ProduccionPiedrineraSerializer(serializers.ModelSerializer):
+    """
+    Serializer para producción de piedrinera con información completa
+    """
+    agregado_codigo = serializers.CharField(source='agregado.codigo', read_only=True)
+    agregado_nombre = serializers.CharField(source='agregado.nombre', read_only=True)
+    supervisor_nombre = serializers.SerializerMethodField()
+    operador_nombre = serializers.SerializerMethodField()
+    estado_display = serializers.CharField(source='get_estado_display', read_only=True)
+    eficiencia_produccion = serializers.FloatField(read_only=True)
+    costo_por_m3 = serializers.FloatField(read_only=True)
+    duracion_produccion = serializers.FloatField(read_only=True)
+
+    class Meta:
+        model = ProduccionPiedrinera
+        fields = (
+            'id', 'codigo_lote',
+            'agregado', 'agregado_id', 'agregado_codigo', 'agregado_nombre',
+            'fecha_produccion', 'hora_inicio_produccion', 'hora_fin_produccion',
+            'supervisor', 'supervisor_id', 'supervisor_nombre',
+            'operador', 'operador_id', 'operador_nombre',
+            'volumen_planificado_m3', 'volumen_producido_m3',
+            'costo_total_q', 'estado', 'estado_display',
+            'calidad', 'observaciones', 'equipos_usados',
+            'eficiencia_produccion', 'costo_por_m3', 'duracion_produccion',
+            'activo', 'created_at', 'updated_at'
+        )
+        read_only_fields = (
+            'id', 'eficiencia_produccion', 'costo_por_m3', 'duracion_produccion',
+            'estado_display', 'created_at', 'updated_at'
+        )
+
+    def get_supervisor_nombre(self, obj):
+        if obj.supervisor:
+            return f"{obj.supervisor.nombres} {obj.supervisor.apellidos}"
+        return None
+
+    def get_operador_nombre(self, obj):
+        if obj.operador:
+            return f"{obj.operador.nombres} {obj.operador.apellidos}"
+        return None
+
+    def to_representation(self, instance):
+        """
+        Personalizar la representación para el frontend
+        """
+        data = super().to_representation(instance)
+        return {
+            'id': str(data.get('id', '')),
+            'codigo_lote': data.get('codigo_lote', ''),
+            'agregado': {
+                'id': instance.agregado_id,
+                'codigo': data.get('agregado_codigo'),
+                'nombre': data.get('agregado_nombre'),
+            },
+            'agregado_id': instance.agregado_id,
+            'agregado_codigo': data.get('agregado_codigo'),
+            'agregado_nombre': data.get('agregado_nombre'),
+            'fecha_produccion': data.get('fecha_produccion', ''),
+            'hora_inicio_produccion': data.get('hora_inicio_produccion', ''),
+            'hora_fin_produccion': data.get('hora_fin_produccion'),
+            'supervisor': {
+                'id': instance.supervisor_id,
+                'nombre': data.get('supervisor_nombre'),
+            } if instance.supervisor_id else None,
+            'supervisor_id': instance.supervisor_id,
+            'supervisor_nombre': data.get('supervisor_nombre'),
+            'operador': {
+                'id': instance.operador_id,
+                'nombre': data.get('operador_nombre'),
+            } if instance.operador_id else None,
+            'operador_id': instance.operador_id,
+            'operador_nombre': data.get('operador_nombre'),
+            'volumen_planificado_m3': float(data.get('volumen_planificado_m3', 0)),
+            'volumen_producido_m3': float(data.get('volumen_producido_m3', 0)),
+            'costo_total_q': float(data.get('costo_total_q', 0)),
+            'estado': data.get('estado', ''),
+            'estado_display': data.get('estado_display', ''),
+            'calidad': data.get('calidad'),
+            'observaciones': data.get('observaciones'),
+            'equipos_usados': data.get('equipos_usados', []),
+            'eficiencia_produccion': float(data.get('eficiencia_produccion', 0)),
+            'costo_por_m3': float(data.get('costo_por_m3', 0)),
+            'duracion_produccion': float(data.get('duracion_produccion', 0)),
+            'activo': data.get('activo', True),
+            'created_at': data.get('created_at', ''),
+            'updated_at': data.get('updated_at', ''),
+            # Campos en camelCase para compatibilidad con frontend
+            'codigoLote': data.get('codigo_lote', ''),
+            'fecha': data.get('fecha_produccion', ''),
+            'fechaProduccion': data.get('fecha_produccion', ''),
+            'horaInicio': data.get('hora_inicio_produccion', ''),
+            'horaInicioProduccion': data.get('hora_inicio_produccion', ''),
+            'horaFin': data.get('hora_fin_produccion'),
+            'horaFinProduccion': data.get('hora_fin_produccion'),
+            'volumenPlanificado': float(data.get('volumen_planificado_m3', 0)),
+            'volumenPlanificadoM3': float(data.get('volumen_planificado_m3', 0)),
+            'volumenProducido': float(data.get('volumen_producido_m3', 0)),
+            'volumenProducidoM3': float(data.get('volumen_producido_m3', 0)),
+            'costoTotal': float(data.get('costo_total_q', 0)),
+            'costoTotalQ': float(data.get('costo_total_q', 0)),
+            'equiposUsados': data.get('equipos_usados', []),
+        }
+
+
+class ProduccionPiedrineraListSerializer(serializers.ModelSerializer):
+    """
+    Serializer simplificado para listar producción de piedrinera
+    """
+    agregado_nombre = serializers.CharField(source='agregado.nombre', read_only=True)
+    supervisor_nombre = serializers.SerializerMethodField()
+    operador_nombre = serializers.SerializerMethodField()
+    estado_display = serializers.CharField(source='get_estado_display', read_only=True)
+
+    class Meta:
+        model = ProduccionPiedrinera
+        fields = (
+            'id', 'codigo_lote', 'fecha_produccion',
+            'agregado_nombre', 'volumen_planificado_m3', 'volumen_producido_m3',
+            'estado', 'estado_display', 'calidad',
+            'supervisor_nombre', 'operador_nombre'
+        )
+
+    def get_supervisor_nombre(self, obj):
+        if obj.supervisor:
+            return f"{obj.supervisor.nombres} {obj.supervisor.apellidos}"
+        return None
+
+    def get_operador_nombre(self, obj):
+        if obj.operador:
+            return f"{obj.operador.nombres} {obj.operador.apellidos}"
+        return None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        return {
+            'id': str(data.get('id', '')),
+            'codigo_lote': data.get('codigo_lote', ''),
+            'fecha': data.get('fecha_produccion', ''),
+            'fecha_produccion': data.get('fecha_produccion', ''),
+            'agregado': data.get('agregado_nombre', ''),
+            'agregado_nombre': data.get('agregado_nombre', ''),
+            'volumen_planificado_m3': float(data.get('volumen_planificado_m3', 0)),
+            'volumen_producido_m3': float(data.get('volumen_producido_m3', 0)),
+            'volumenPlanificado': float(data.get('volumen_planificado_m3', 0)),
+            'volumenProducido': float(data.get('volumen_producido_m3', 0)),
+            'estado': data.get('estado', ''),
+            'estado_display': data.get('estado_display', ''),
+            'calidad': data.get('calidad'),
+            'supervisor_nombre': data.get('supervisor_nombre'),
+            'operador': data.get('operador_nombre'),
+            'operador_nombre': data.get('operador_nombre'),
         }
 

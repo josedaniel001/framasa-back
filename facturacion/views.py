@@ -37,6 +37,17 @@ class FacturaViewSet(viewsets.ModelViewSet):
             return FacturaCreateSerializer
         return FacturaSerializer
     
+    def create(self, request, *args, **kwargs):
+        """Crear factura y retornar con FacturaSerializer completo"""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        factura = serializer.save()
+        
+        # Serializar la respuesta con FacturaSerializer para incluir todos los campos
+        response_serializer = FacturaSerializer(factura, context={'request': request})
+        headers = self.get_success_headers(response_serializer.data)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+    
     def get_queryset(self):
         """Filtros opcionales"""
         queryset = self.queryset
@@ -216,8 +227,13 @@ class FacturaViewSet(viewsets.ModelViewSet):
         """Estadísticas de facturación"""
         fecha_desde = request.query_params.get('fecha_desde', None)
         fecha_hasta = request.query_params.get('fecha_hasta', None)
+        empresa = request.query_params.get('empresa', None)
         
         queryset = Factura.objects.exclude(estado=EstadoFactura.ANULADA)
+        
+        # Filtro por empresa
+        if empresa:
+            queryset = queryset.filter(empresa=empresa)
         
         if fecha_desde:
             try:

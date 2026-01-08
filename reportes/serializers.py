@@ -19,28 +19,26 @@ class InventarioUnificadoSerializer(serializers.Serializer):
     total_productos = serializers.IntegerField()
     productos_activos = serializers.IntegerField()
     productos_inactivos = serializers.IntegerField()
-    stock_total = serializers.DecimalField(max_digits=12, decimal_places=2)
-    stock_minimo_total = serializers.DecimalField(max_digits=12, decimal_places=2)
     productos_stock_bajo = serializers.IntegerField()
     valor_inventario_estimado = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
     unidades = serializers.CharField()
 
 
 class EstadisticaPredictivaSerializer(serializers.Serializer):
-    """Serializer para estadísticas predictivas"""
-    empresa = serializers.CharField()
+    """Serializer para estadísticas predictivas por producto"""
     producto_id = serializers.IntegerField()
     producto_codigo = serializers.CharField()
     producto_nombre = serializers.CharField()
-    stock_actual = serializers.DecimalField(max_digits=12, decimal_places=2)
-    stock_minimo = serializers.DecimalField(max_digits=12, decimal_places=2)
-    promedio_ventas_diarias = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
-    promedio_ventas_semanales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
-    promedio_ventas_mensuales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
-    dias_restantes_estimados = serializers.IntegerField(required=False, allow_null=True)
-    necesita_reposicion = serializers.BooleanField()
-    tendencia = serializers.CharField(required=False, allow_null=True)  # 'creciente', 'decreciente', 'estable'
-    unidades = serializers.CharField()
+    empresa = serializers.CharField()
+    periodo = serializers.IntegerField()
+    ventas_q = serializers.DecimalField(max_digits=12, decimal_places=2)
+    prom_diario_q = serializers.DecimalField(max_digits=12, decimal_places=2)
+    tendencia_porcentaje = serializers.DecimalField(max_digits=6, decimal_places=1)
+    proyeccion_30d_q = serializers.DecimalField(max_digits=12, decimal_places=2)
+    stock_actual = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    dias_stock = serializers.IntegerField(required=False, allow_null=True)
+    riesgo_stock = serializers.CharField(required=False, allow_null=True)  # 'Alto', 'Medio', 'Bajo', 'Sin datos'
+    recomendacion = serializers.CharField()
 
 
 class ReporteInventarioUnificadoSerializer(serializers.Serializer):
